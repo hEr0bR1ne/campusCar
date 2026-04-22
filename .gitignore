@@ -1,0 +1,22 @@
+# 运行时生成的数据
+data/logs/
+data/recorded_paths/
+
+# 相机图片（体积大，用户自行保存）
+data/camera_images/
+
+# ROS2 编译产物（用户自行编译）
+src/rtk_tools/rosbridge_ts/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 系统文件
+.DS_Store
+*.swp
+*.swo
+
+# 敏感配置（如有本地覆盖）
+config/robot.local.env

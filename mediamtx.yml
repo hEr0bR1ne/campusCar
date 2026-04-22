@@ -1,0 +1,31 @@
+###############################################
+# mediamtx 最小配置 - robot_cam RTSP 推流
+###############################################
+
+# RTSP 监听端口
+rtspAddress: :8554
+
+# 强制 RTSP 客户端走 TCP，避免 UE / Windows / 防火墙环境下
+# 因 RTP/RTCP UDP 端口被拦截而出现“能连上但没画面”的情况。
+protocols: [tcp]
+
+# 内置 HLS 输出，供 UE5 Electra 或浏览器调试使用
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+
+# 不需要认证
+authMethod: internal
+
+# 日志
+logLevel: info
+logDestinations: [stdout]
+
+# 路径配置
+paths:
+  robot_cam:
+    # 允许任何来源推流，不需要认证
+    publishUser:
+    publishPass:
+    readUser:
+    readPass:

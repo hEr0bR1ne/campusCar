@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=campusCar - 停止全栈
+Comment=停止所有小车服务
+Exec=gnome-terminal -- bash -lc "bash '$HOME/campusCar/scripts/stop_all.sh'; echo; read -p 'Press Enter to close...'"
+Icon=process-stop
+Terminal=false
+Categories=Utility;
