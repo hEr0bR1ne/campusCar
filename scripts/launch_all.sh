@@ -77,6 +77,12 @@ reset_orbbec_usb() {
         sleep 2
     fi
 }
+stop_serial_claimers() {
+    # brltty-udev can respawn /sbin/brltty and momentarily grab USB ACM ports.
+    srun systemctl stop ModemManager brltty brltty-udev 2>/dev/null || true
+    srun pkill -f '^/sbin/brltty' 2>/dev/null || true
+    sleep 0.5
+}
 start_live_log() {
     local label="$1"
     local file="$2"
@@ -229,8 +235,7 @@ if [ "$LIVE_RTK_LOGS" = "1" ]; then
     log "实时显示 RTK/rosbridge/UE 输出（LIVE_RTK_LOGS=0 可关闭）"
     start_live_ue_status "$U2R_COMMAND_LOG"
 fi
-srun systemctl stop ModemManager 2>/dev/null || true
-srun systemctl stop brltty       2>/dev/null || true
+stop_serial_claimers
 
 SERIAL_PORT=""
 for p in /dev/serial/by-id/* /dev/ttyACM* /dev/ttyUSB*; do
@@ -244,7 +249,7 @@ if [ -n "$SERIAL_PORT" ]; then
     ok "RTK 串口: $SERIAL_PORT"
     srun chmod 666 "$SERIAL_PORT"
     start_live_log "rtk-driver" "$RTK_DRIVER_LOG"
-    nohup ros2 run nmea_navsat_driver nmea_serial_driver \
+    nohup setsid ros2 run nmea_navsat_driver nmea_serial_driver \
         --ros-args -p port:="$SERIAL_PORT" -p baud:="${RTK_BAUD}" \
         > "$RTK_DRIVER_LOG" 2>&1 &
     sleep 1
