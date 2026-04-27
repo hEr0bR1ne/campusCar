@@ -22,12 +22,16 @@
 
 ## Current Open Focus
 
-- No active engineering task has been pinned here yet.
-- When a new task starts, record:
-  - current objective
-  - constraints / assumptions
-  - files touched
-  - next recommended step after restart
+- Shutdown checkpoint for 2026-04-27:
+  - Current branch is `codex/full-stack-ue-rtk-gui`.
+  - Code version was pushed to GitHub; local HEAD and `origin/codex/full-stack-ue-rtk-gui` were aligned at `c46310d Normalize quoted UE command payloads` before this checkpoint edit.
+  - The latest working UE integration uses `src/rosbridge_bson_tcp.py` on TCP/BSON port `9090`, not the old rosbridge WebSocket launch.
+  - `/U2RTopic_Command` compatibility is in `src/rosbridge_bson_tcp.py`: UE command payloads sent as a BSON dict, as `{data: dict}`, or as an extra-quoted JSON string like `"{"commandId":...}"` are normalized into `std_msgs/String.data`.
+  - The successful end-to-end smoke test used a safe `Stop` command and produced `方向指令：Stop  停车` in `data/logs/ue_bridge.log`.
+  - Camera startup was optimized to reuse an already publishing Orbbec camera by default and the GUI now prefers local MJPEG frames for faster display.
+  - Known hardware note: current Orbbec connection showed `USB2.1` / 480M and cold camera initialization around 40 seconds; USB3 cabling/port is still the likely hardware fix.
+  - Next recommended step after reboot: run `cd ~/campusCar && ./scripts/launch_all.sh`, ask UE to resend the standard coordinate command, then watch `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, and `data/logs/ue_bridge.log`.
+  - If UE still reaches the bridge but movement does not start, inspect RTK `/fix` and `/heading` readiness rather than JSON transport first.
 
 ## Update Trigger
 
