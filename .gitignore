@@ -7,6 +7,7 @@ data/camera_images/
 
 # ROS2 编译产物（用户自行编译）
 src/rtk_tools/rosbridge_ts/
+orbbec_ws/
 
 # Python 缓存
 __pycache__/

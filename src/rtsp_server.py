@@ -6,13 +6,14 @@ RTSP 推流服务（ROS2 版）
 用法:
   source /opt/ros/humble/setup.bash
   python3 rtsp_server.py
-  python3 rtsp_server.py --topic /camera/color/image_flipped --rtsp rtsp://127.0.0.1:8554/robot_cam
+  python3 rtsp_server.py --topic /camera/color/image_raw --rtsp rtsp://127.0.0.1:8554/robot_cam
 """
 import argparse
 import os
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -20,7 +21,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CompressedImage
 
-DEFAULT_TOPIC = "/camera/color/image_flipped"
+DEFAULT_TOPIC = "/camera/color/image_raw"
 DEFAULT_RTSP  = "rtsp://127.0.0.1:8554/robot_cam"
 DEFAULT_FPS   = 30
 DEFAULT_BITRATE = 1000  # kbps

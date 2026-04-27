@@ -3,7 +3,7 @@
 GPS 航点导航节点 - 阿克曼底盘闭环控制 (Stanley Controller)
 
 用法:
-  python3 gps_navigator.py --waypoints ~/RTK_project/recorded_paths/path_xxx.json
+  python3 gps_navigator.py --waypoints ../../data/recorded_paths/path_xxx.json
   python3 gps_navigator.py --waypoints path.json --loop       # 循环执行
   python3 gps_navigator.py --waypoints path.json --speed 0.4  # 自定义速度
   python3 gps_navigator.py --waypoints path.json --reverse    # 反向行驶

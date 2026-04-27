@@ -6,7 +6,7 @@ MJPEG HTTP 推流服务
 用法:
   source /opt/ros/humble/setup.bash
   python3 mjpeg_server.py
-  python3 mjpeg_server.py --port 8080 --quality 80 --topic /camera/color/image_flipped
+  python3 mjpeg_server.py --port 8080 --quality 80 --topic /camera/color/image_raw
 """
 import sys
 import os
@@ -22,7 +22,7 @@ from sensor_msgs.msg import Image, CompressedImage
 import cv2
 import numpy as np
 
-DEFAULT_TOPIC   = "/camera/color/image_flipped"
+DEFAULT_TOPIC   = "/camera/color/image_raw"
 DEFAULT_PORT    = 8080
 DEFAULT_QUALITY = 80
 

@@ -6,6 +6,8 @@
 """
 import sys
 import os
+import shlex
+import socket
 import threading
 import time
 import json
@@ -27,19 +29,91 @@ from tkinter import ttk, messagebox
 import cv2
 import numpy as np
 from PIL import Image as PILImage, ImageTk
-from pynput import keyboard as pynput_kb
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
-CAR_IP          = "192.168.100.2"
-CMD_VEL_TOPIC   = "/cmd_vel"
-FIX_TOPIC       = "/fix"
-IMAGE_TOPIC     = "/camera/color/image_flipped"   # 优先尝试
-IMAGE_TOPIC_ALT = "/usb_cam/image_raw"
-COMPRESSED_TOPIC = IMAGE_TOPIC + "/compressed"
+
+def load_project_env():
+    env_file = Path(__file__).resolve().parents[1] / "config" / "robot.env"
+    if not env_file.exists():
+        return
+
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        try:
+            parts = shlex.split(line, comments=True, posix=True)
+        except ValueError:
+            continue
+        if not parts or "=" not in parts[0]:
+            continue
+        key, value = parts[0].split("=", 1)
+        if not key.replace("_", "").isalnum() or key[0].isdigit():
+            continue
+        if key in os.environ or "$(" in value or "${" in value:
+            continue
+        os.environ[key] = value
+
+
+def env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return default if value is None or value == "" else value
+
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, ""))
+    except ValueError:
+        return default
+
+
+load_project_env()
+
+CAR_IP          = env_str("CAR_IP", "192.168.100.2")
+CMD_VEL_TOPIC   = env_str("CMD_VEL_TOPIC", "/cmd_vel")
+FIX_TOPIC       = env_str("FIX_TOPIC", "/fix")
+IMAGE_TOPIC     = env_str("IMAGE_TOPIC", "/camera/color/image_raw")
+IMAGE_TOPIC_CANDIDATES = list(dict.fromkeys([
+    IMAGE_TOPIC,
+    "/camera/color/image_raw",
+    "/camera/color/image",
+    "/camera/image_raw",
+    "/color/image_raw",
+    "/usb_cam/image_raw",
+]))
+COMPRESSED_TOPIC_CANDIDATES = list(dict.fromkeys([
+    f"{topic}/compressed" for topic in IMAGE_TOPIC_CANDIDATES
+]))
+UE_COMMAND_TOPIC = env_str("UE_COMMAND_TOPIC", "/U2RTopic_Command")
+RTK_POS_TOPIC    = env_str("RTK_POS_TOPIC", "/R2UTopic_Pos")
+RTK_TEXT_TOPIC   = env_str("RTK_TEXT_TOPIC", "/R2UTopic_Text")
+ROSBRIDGE_PORT   = env_int("ROSBRIDGE_PORT", 9090)
 
 LINEAR_SPEED    = 0.3   # m/s
 ANGULAR_SPEED   = 0.5   # rad/s
+CMD_REPEAT_MS   = 50
+KEY_RELEASE_DEBOUNCE_MS = 120
 RECORD_DIR      = Path(__file__).parent.parent / "data" / "recorded_paths"
+
+MOVE_KEYS = {"w", "a", "s", "d", "up", "down", "left", "right"}
+
+SPEED_BINDINGS = {
+    "q": (1.1, 1.1),
+    "z": (0.9, 0.9),
+    "r": (1.1, 1.0),
+    "f": (0.9, 1.0),
+    "t": (1.0, 1.1),
+    "g": (1.0, 0.9),
+}
+
+TOPICS_TO_MONITOR = [
+    (FIX_TOPIC, "RTK原始"),
+    (IMAGE_TOPIC, "相机图像"),
+    (RTK_POS_TOPIC, "UE坐标"),
+    (UE_COMMAND_TOPIC, "UE指令"),
+    (RTK_TEXT_TOPIC, "UE回复"),
+    (CMD_VEL_TOPIC, "底盘控制"),
+]
 
 # ── 颜色主题 ──────────────────────────────────────────────────────────────────
 BG       = "#1e1e2e"
@@ -50,6 +124,8 @@ RED      = "#f38ba8"
 YELLOW   = "#f9e2af"
 TEXT     = "#cdd6f4"
 SUBTEXT  = "#6c7086"
+PANEL    = "#232337"
+PANEL2   = "#171724"
 
 # 字体（在 main() 里 tk.Tk() 之后初始化，避免 rclpy 信号冲突）
 FONT_TITLE = FONT_NORMAL = FONT_SMALL = FONT_CARD = FONT_BTN = FONT_MONO = None
@@ -70,7 +146,19 @@ class CarNode(Node):
         self.lon = None
         self.alt = None
         self.gps_status = -1
+        self.fix_time = None
         self.latest_frame = None   # numpy BGR
+        self.frame_time = None
+        self.image_topic_active = ""
+        self.ue_position = None    # parsed /R2UTopic_Pos payload
+        self.ue_position_raw = ""
+        self.ue_position_time = None
+        self.ue_command_raw = ""
+        self.ue_command_summary = "等待 UE 指令"
+        self.ue_command_time = None
+        self.topic_status = {}
+        self.rosbridge_ok = False
+        self.rosbridge_checked_at = None
         self._lock = threading.Lock()
 
         # 路径录制
@@ -79,11 +167,25 @@ class CarNode(Node):
 
         # 订阅 GPS
         self.create_subscription(NavSatFix, FIX_TOPIC, self._on_fix, 10)
+        self.create_subscription(String, RTK_POS_TOPIC, self._on_ue_position, 10)
+        self.create_subscription(String, UE_COMMAND_TOPIC, self._on_ue_command, 10)
 
-        # 订阅图像（尝试多个话题）
-        self.create_subscription(Image, IMAGE_TOPIC, self._on_image_raw, 10)
-        self.create_subscription(Image, IMAGE_TOPIC_ALT, self._on_image_raw, 10)
-        self.create_subscription(CompressedImage, COMPRESSED_TOPIC, self._on_image_compressed, 10)
+        # 订阅图像（尝试多个常见话题，避免 launch 文件改名后 GUI 黑屏）
+        for topic in IMAGE_TOPIC_CANDIDATES:
+            self.create_subscription(
+                Image,
+                topic,
+                lambda msg, image_topic=topic: self._on_image_raw(msg, image_topic),
+                10,
+            )
+        for topic in COMPRESSED_TOPIC_CANDIDATES:
+            self.create_subscription(
+                CompressedImage,
+                topic,
+                lambda msg, image_topic=topic: self._on_image_compressed(msg, image_topic),
+                10,
+            )
+        self.create_timer(1.0, self._refresh_runtime_status)
 
     # ── 回调 ──────────────────────────────────────────────────────────────────
     def _on_fix(self, msg: NavSatFix):
@@ -92,21 +194,91 @@ class CarNode(Node):
             self.lon = msg.longitude
             self.alt = msg.altitude
             self.gps_status = msg.status.status
+            self.fix_time = time.time()
             if self.recording and self.lat is not None:
                 self.path_points.append((self.lat, self.lon, self.alt, time.time()))
 
-    def _on_image_raw(self, msg: Image):
+    def _on_image_raw(self, msg: Image, topic: str):
         frame = self._decode_raw(msg)
         if frame is not None:
             with self._lock:
                 self.latest_frame = frame
+                self.frame_time = time.time()
+                self.image_topic_active = topic
 
-    def _on_image_compressed(self, msg: CompressedImage):
+    def _on_image_compressed(self, msg: CompressedImage, topic: str):
         data = np.frombuffer(msg.data, dtype=np.uint8)
         frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
         if frame is not None:
             with self._lock:
                 self.latest_frame = frame
+                self.frame_time = time.time()
+                self.image_topic_active = topic
+
+    def _on_ue_position(self, msg: String):
+        now = time.time()
+        raw = msg.data
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            payload = None
+        with self._lock:
+            self.ue_position = payload
+            self.ue_position_raw = raw
+            self.ue_position_time = now
+
+    def _on_ue_command(self, msg: String):
+        now = time.time()
+        raw = msg.data
+        summary = self._summarize_ue_command(raw)
+        with self._lock:
+            self.ue_command_raw = raw
+            self.ue_command_summary = summary
+            self.ue_command_time = now
+
+    def _summarize_ue_command(self, raw: str) -> str:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return "非法 JSON"
+
+        cmd_id = data.get("commandId", "--")
+        cmd_type = data.get("commandType", "--")
+        robot_id = data.get("RobotId", "--")
+        params = data.get("commandParams", {}) if isinstance(data.get("commandParams"), dict) else {}
+        dest = params.get("destination", "--")
+        speed = params.get("speed", "--")
+
+        if isinstance(dest, dict):
+            x = dest.get("x", "--")
+            y = dest.get("y", "--")
+            dest_text = f"坐标 x={x}, y={y}"
+        else:
+            dest_text = str(dest)
+        return f"{cmd_id} | {cmd_type} | {robot_id} | {dest_text} | speed={speed}"
+
+    def _refresh_runtime_status(self):
+        now = time.time()
+        topic_status = {}
+        for topic, _label in TOPICS_TO_MONITOR:
+            try:
+                topic_status[topic] = {
+                    "publishers": self.count_publishers(topic),
+                    "subscribers": self.count_subscribers(topic),
+                }
+            except Exception:
+                topic_status[topic] = {"publishers": 0, "subscribers": 0}
+
+        try:
+            with socket.create_connection(("127.0.0.1", ROSBRIDGE_PORT), timeout=0.15):
+                rosbridge_ok = True
+        except OSError:
+            rosbridge_ok = False
+
+        with self._lock:
+            self.topic_status = topic_status
+            self.rosbridge_ok = rosbridge_ok
+            self.rosbridge_checked_at = now
 
     def _decode_raw(self, msg: Image):
         enc = msg.encoding.lower()
@@ -164,7 +336,7 @@ class CarNode(Node):
     # ── 读取状态（线程安全）──────────────────────────────────────────────────
     def get_gps(self):
         with self._lock:
-            return self.lat, self.lon, self.alt, self.gps_status
+            return self.lat, self.lon, self.alt, self.gps_status, self.fix_time
 
     def get_frame(self):
         with self._lock:
@@ -173,6 +345,22 @@ class CarNode(Node):
     def get_path_count(self):
         with self._lock:
             return len(self.path_points)
+
+    def get_ue_monitor(self):
+        with self._lock:
+            return {
+                "position": dict(self.ue_position) if isinstance(self.ue_position, dict) else self.ue_position,
+                "position_raw": self.ue_position_raw,
+                "position_time": self.ue_position_time,
+                "command_raw": self.ue_command_raw,
+                "command_summary": self.ue_command_summary,
+                "command_time": self.ue_command_time,
+                "topic_status": {k: dict(v) for k, v in self.topic_status.items()},
+                "rosbridge_ok": self.rosbridge_ok,
+                "rosbridge_checked_at": self.rosbridge_checked_at,
+                "image_topic_active": self.image_topic_active,
+                "frame_time": self.frame_time,
+            }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -183,9 +371,13 @@ class CarGUI:
         self.root = root
         self.node = node
 
-        # 按键状态
+        # 键盘控制状态：WASD 负责输入手感，底层仍发布 Twist(linear.x, angular.z)
         self._keys_held: set[str] = set()
-        self._cmd_timer = None
+        self._release_jobs = {}
+        self._current_linear = 0.0
+        self._current_angular = 0.0
+        self._last_raw_display = None
+        self._camera_view_size = (0, 0)
 
         # 录制状态
         self._recording = False
@@ -199,6 +391,7 @@ class CarGUI:
         self.root.title("小车控制台")
         self.root.configure(bg=BG)
         self.root.resizable(True, True)
+        self.root.minsize(1180, 720)
 
         # ── 顶部标题栏 ────────────────────────────────────────────────────────
         title_bar = tk.Frame(self.root, bg=BG, pady=6)
@@ -209,199 +402,341 @@ class CarGUI:
                                 bg=BG, fg=GREEN)
         self.lbl_ros.pack(side=tk.RIGHT, padx=4)
 
-        # ── 主体：左列 + 右列 ─────────────────────────────────────────────────
+        # ── 主体：左侧视频/控制 + 右侧联调信息 ────────────────────────────────
         body = tk.Frame(self.root, bg=BG)
         body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
 
         left = tk.Frame(body, bg=BG)
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        right = tk.Frame(body, bg=BG, width=300)
+        right = tk.Frame(body, bg=BG, width=440)
         right.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
         right.pack_propagate(False)
 
         # ── 摄像头画面 ────────────────────────────────────────────────────────
-        cam_frame = tk.Frame(left, bg=BG2, bd=0, highlightthickness=1,
-                             highlightbackground=SUBTEXT)
-        cam_frame.pack(fill=tk.BOTH, expand=True)
+        self.cam_frame = tk.Frame(left, bg=BG2, bd=0, highlightthickness=1,
+                                  highlightbackground=SUBTEXT)
+        self.cam_frame.pack(fill=tk.BOTH, expand=True)
+        self.cam_frame.pack_propagate(False)
 
-        self.cam_label = tk.Label(cam_frame, bg="#000000",
+        self.cam_label = tk.Label(self.cam_frame, bg="#000000",
                                   text="等待摄像头...", fg=SUBTEXT,
-                                  font=FONT_NORMAL)
+                                  font=FONT_NORMAL, width=1, height=1)
         self.cam_label.pack(fill=tk.BOTH, expand=True)
+        self.cam_frame.bind("<Configure>", self._on_camera_area_configure)
 
-        # ── GPS 信息面板 ──────────────────────────────────────────────────────
-        gps_panel = self._card(right, "GPS 定位")
-        gps_panel.pack(fill=tk.X, pady=(0, 8))
-
-        self.lbl_lat  = self._kv(gps_panel, "纬度")
-        self.lbl_lon  = self._kv(gps_panel, "经度")
-        self.lbl_alt  = self._kv(gps_panel, "海拔")
-        self.lbl_gps_status = self._kv(gps_panel, "状态")
+        left_bottom = tk.Frame(left, bg=BG)
+        left_bottom.pack(fill=tk.X, pady=(10, 0))
 
         # ── 键盘控制面板 ──────────────────────────────────────────────────────
-        ctrl_panel = self._card(right, "键盘控制")
-        ctrl_panel.pack(fill=tk.X, pady=(0, 8))
+        ctrl_panel = self._card(left_bottom, "键盘控制", side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
 
-        self._build_dpad(ctrl_panel)
+        ctrl_content = tk.Frame(ctrl_panel, bg=BG2)
+        ctrl_content.pack(fill=tk.X)
+        self._build_dpad(ctrl_content)
 
-        speed_row = tk.Frame(ctrl_panel, bg=BG2)
-        speed_row.pack(fill=tk.X, pady=(8, 0))
+        speed_box = tk.Frame(ctrl_content, bg=BG2)
+        speed_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(12, 0))
+
+        speed_row = tk.Frame(speed_box, bg=BG2)
+        speed_row.pack(fill=tk.X)
         tk.Label(speed_row, text="线速", bg=BG2, fg=SUBTEXT,
-                 font=FONT_SMALL).pack(side=tk.LEFT)
+                 font=FONT_SMALL, width=5, anchor=tk.W).pack(side=tk.LEFT)
         self.speed_var = tk.DoubleVar(value=LINEAR_SPEED)
         spd_scale = tk.Scale(speed_row, from_=0.05, to=1.0, resolution=0.05,
                  orient=tk.HORIZONTAL, variable=self.speed_var,
                  bg=BG2, fg=TEXT, troughcolor=BG, highlightthickness=0,
-                 length=160, takefocus=0)
-        spd_scale.pack(side=tk.RIGHT)
+                 length=180, takefocus=0)
+        spd_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
         spd_scale.bind("<ButtonRelease-1>", lambda e: self.root.focus_set())
 
-        ang_row = tk.Frame(ctrl_panel, bg=BG2)
+        ang_row = tk.Frame(speed_box, bg=BG2)
         ang_row.pack(fill=tk.X, pady=(2, 0))
         tk.Label(ang_row, text="角速", bg=BG2, fg=SUBTEXT,
-                 font=FONT_SMALL).pack(side=tk.LEFT)
+                 font=FONT_SMALL, width=5, anchor=tk.W).pack(side=tk.LEFT)
         self.ang_var = tk.DoubleVar(value=ANGULAR_SPEED)
         ang_scale = tk.Scale(ang_row, from_=0.1, to=2.0, resolution=0.1,
                  orient=tk.HORIZONTAL, variable=self.ang_var,
                  bg=BG2, fg=TEXT, troughcolor=BG, highlightthickness=0,
-                 length=160, takefocus=0)
-        ang_scale.pack(side=tk.RIGHT)
+                 length=180, takefocus=0)
+        ang_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ang_scale.bind("<ButtonRelease-1>", lambda e: self.root.focus_set())
 
-        self.lbl_cmd = tk.Label(ctrl_panel, text="停止", bg=BG2, fg=SUBTEXT,
-                                font=FONT_SMALL)
-        self.lbl_cmd.pack(anchor=tk.W, pady=(4, 0))
+        self.lbl_cmd = tk.Label(speed_box, text="停止", bg=BG2, fg=SUBTEXT,
+                                font=FONT_SMALL, anchor=tk.W)
+        self.lbl_cmd.pack(fill=tk.X, pady=(2, 0))
+        self.lbl_key_help = tk.Label(
+            speed_box,
+            text="WASD/方向键或按钮长按移动，组合键斜向；松开停止，空格/X急停",
+            bg=BG2, fg=SUBTEXT, font=FONT_SMALL,
+            wraplength=360, justify=tk.LEFT,
+        )
+        self.lbl_key_help.pack(fill=tk.X, pady=(2, 0))
 
         # ── 录制面板 ──────────────────────────────────────────────────────────
-        rec_panel = self._card(right, "路径录制")
-        rec_panel.pack(fill=tk.X, pady=(0, 8))
+        rec_panel = self._card(left_bottom, "路径录制", side=tk.RIGHT, fill=tk.Y)
 
         self.btn_record = tk.Button(
             rec_panel, text="开始录制", font=FONT_BTN,
             bg=GREEN, fg=BG, activebackground="#7ec87a", relief=tk.FLAT,
-            padx=12, pady=6, cursor="hand2", command=self._toggle_record)
+            padx=18, pady=8, cursor="hand2", command=self._toggle_record)
         self.btn_record.pack(fill=tk.X)
 
         self.lbl_rec_info = tk.Label(rec_panel, text="未录制", bg=BG2,
-                                     fg=SUBTEXT, font=FONT_SMALL)
-        self.lbl_rec_info.pack(anchor=tk.W, pady=(4, 0))
+                                     fg=SUBTEXT, font=FONT_SMALL, width=18,
+                                     anchor=tk.W)
+        self.lbl_rec_info.pack(anchor=tk.W, pady=(6, 0))
+
+        # ── 连接状态面板 ──────────────────────────────────────────────────────
+        conn_panel = self._card(right, "UE 连接状态", fill=tk.X, pady=(0, 8))
+
+        self.lbl_rosbridge = self._kv(conn_panel, "rosbridge", label_width=10)
+        self.lbl_camera_stream = self._kv(conn_panel, "相机画面", label_width=10)
+        self.lbl_ue_activity = self._kv(conn_panel, "UE活跃", label_width=10)
+        self.lbl_graph_time = self._kv(conn_panel, "刷新", label_width=10)
+
+        # ── 话题状态面板 ──────────────────────────────────────────────────────
+        topics_panel = self._card(right, "UE 相关话题", fill=tk.X, pady=(0, 8))
+        self.topic_labels = {}
+        for topic, label in TOPICS_TO_MONITOR:
+            self.topic_labels[topic] = self._kv(topics_panel, label, label_width=8)
+
+        # ── 坐标信息面板 ──────────────────────────────────────────────────────
+        gps_panel = self._card(right, "实时经纬度", fill=tk.X, pady=(0, 8))
+
+        tk.Label(gps_panel, text="/fix 原始定位", bg=BG2, fg=ACCENT,
+                 font=FONT_SMALL).pack(anchor=tk.W, pady=(0, 2))
+        self.lbl_lat  = self._kv(gps_panel, "纬度", label_width=8)
+        self.lbl_lon  = self._kv(gps_panel, "经度", label_width=8)
+        self.lbl_alt  = self._kv(gps_panel, "海拔", label_width=8)
+        self.lbl_gps_status = self._kv(gps_panel, "状态", label_width=8)
+        self.lbl_fix_time = self._kv(gps_panel, "更新时间", label_width=8)
+
+        tk.Label(gps_panel, text="/R2UTopic_Pos 发给 UE", bg=BG2, fg=ACCENT,
+                 font=FONT_SMALL).pack(anchor=tk.W, pady=(8, 2))
+        self.lbl_ue_lat = self._kv(gps_panel, "纬度", label_width=8)
+        self.lbl_ue_lon = self._kv(gps_panel, "经度", label_width=8)
+        self.lbl_ue_alt = self._kv(gps_panel, "海拔", label_width=8)
+        self.lbl_ue_pos_time = self._kv(gps_panel, "更新时间", label_width=8)
+
+        # ── UE 消息面板 ──────────────────────────────────────────────────────
+        msg_panel = self._card(right, "UE 最近发送", fill=tk.BOTH, expand=True)
+
+        self.lbl_ue_cmd_time = self._kv(msg_panel, "接收时间", label_width=8)
+        self.lbl_ue_cmd_summary = tk.Label(
+            msg_panel, text="等待 UE 指令", bg=BG2, fg=SUBTEXT,
+            font=FONT_MONO, anchor=tk.W, justify=tk.LEFT, wraplength=390,
+        )
+        self.lbl_ue_cmd_summary.pack(fill=tk.X, pady=(4, 4))
+        self.txt_ue_cmd_raw = tk.Text(
+            msg_panel, height=7, bg=PANEL2, fg=TEXT, insertbackground=TEXT,
+            relief=tk.FLAT, font=FONT_MONO, wrap=tk.WORD, padx=8, pady=6,
+            takefocus=0,
+        )
+        self.txt_ue_cmd_raw.pack(fill=tk.BOTH, expand=True)
+        self.txt_ue_cmd_raw.insert("1.0", "等待 UE 发送消息...")
+        self.txt_ue_cmd_raw.configure(state=tk.DISABLED)
 
         # ── 底部状态栏 ────────────────────────────────────────────────────────
         status_bar = tk.Frame(self.root, bg=BG2, pady=4)
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        self.lbl_status = tk.Label(status_bar, text="就绪  |  WASD/方向键控制  |  空格停止",
+        self.lbl_status = tk.Label(status_bar, text="就绪  |  WASD/方向键移动  |  组合键转弯  |  空格/X停止",
                                    bg=BG2, fg=SUBTEXT, font=FONT_SMALL)
         self.lbl_status.pack(side=tk.LEFT, padx=10)
 
-    def _card(self, parent, title: str) -> tk.Frame:
+    def _card(self, parent, title: str, **pack_options) -> tk.Frame:
         """带标题的卡片容器"""
         outer = tk.Frame(parent, bg=BG)
         tk.Label(outer, text=title, bg=BG, fg=ACCENT,
                  font=FONT_CARD).pack(anchor=tk.W, pady=(0, 4))
         inner = tk.Frame(outer, bg=BG2, padx=10, pady=8,
                          highlightthickness=1, highlightbackground=SUBTEXT)
-        inner.pack(fill=tk.X)
+        inner.pack(fill=tk.BOTH, expand=True)
+        if pack_options:
+            outer.pack(**pack_options)
         return inner
 
-    def _kv(self, parent, label: str) -> tk.Label:
+    def _kv(self, parent, label: str, label_width: int = 7) -> tk.Label:
         """键值行，返回值标签"""
         row = tk.Frame(parent, bg=BG2)
         row.pack(fill=tk.X, pady=1)
         tk.Label(row, text=label, bg=BG2, fg=SUBTEXT,
-                 font=FONT_SMALL, width=5, anchor=tk.W).pack(side=tk.LEFT)
+                 font=FONT_SMALL, width=label_width, anchor=tk.W).pack(side=tk.LEFT)
         val = tk.Label(row, text="--", bg=BG2, fg=TEXT,
-                       font=FONT_MONO, anchor=tk.W)
+                       font=FONT_MONO, anchor=tk.W, justify=tk.LEFT,
+                       wraplength=330)
         val.pack(side=tk.LEFT, fill=tk.X, expand=True)
         return val
 
     def _build_dpad(self, parent):
         """方向键示意图"""
         dpad = tk.Frame(parent, bg=BG2)
-        dpad.pack(pady=(4, 0))
+        dpad.pack(side=tk.LEFT, pady=(4, 0))
 
         btn_cfg = dict(width=3, height=1, relief=tk.FLAT, font=FONT_NORMAL,
                        bg=BG, fg=TEXT, activebackground=ACCENT, cursor="hand2")
 
-        self.btn_fwd  = tk.Button(dpad, text="^", **btn_cfg,
-                                  command=lambda: self._manual_cmd(1, 0))
-        self.btn_back = tk.Button(dpad, text="v", **btn_cfg,
-                                  command=lambda: self._manual_cmd(-1, 0))
-        self.btn_left = tk.Button(dpad, text="<", **btn_cfg,
-                                  command=lambda: self._manual_cmd(0.3, 1))
-        self.btn_right= tk.Button(dpad, text=">", **btn_cfg,
-                                  command=lambda: self._manual_cmd(0.3, -1))
-        self.btn_stop = tk.Button(dpad, text="[]", width=3, height=1,
-                                  relief=tk.FLAT, font=FONT_NORMAL,
-                                  bg=RED, fg=BG, activebackground="#e07090",
-                                  cursor="hand2", command=self._stop_car)
+        layout = [
+            ("W+A", 1.0, 1.0, 0, 0), ("W", 1.0, 0.0, 0, 1), ("W+D", 1.0, -1.0, 0, 2),
+            ("A", 0.0, 1.0, 1, 0), ("X", 0.0, 0.0, 1, 1), ("D", 0.0, -1.0, 1, 2),
+            ("S+A", -1.0, 1.0, 2, 0), ("S", -1.0, 0.0, 2, 1), ("S+D", -1.0, -1.0, 2, 2),
+        ]
+        self._button_motion = None
+        for label, lin_sign, ang_sign, row, col in layout:
+            if label == "X":
+                button = tk.Button(
+                    dpad, text="X", width=5, height=1,
+                    relief=tk.FLAT, font=FONT_NORMAL,
+                    bg=RED, fg=BG, activebackground="#e07090",
+                    cursor="hand2", command=self._stop_car,
+                )
+            else:
+                button = tk.Button(
+                    dpad, text=label, width=5, height=1,
+                    relief=tk.FLAT, font=FONT_NORMAL,
+                    bg=BG, fg=TEXT, activebackground=ACCENT, cursor="hand2",
+                )
+                button.bind("<ButtonPress-1>", lambda _e, l=lin_sign, a=ang_sign: self._start_button_motion(l, a))
+                button.bind("<ButtonRelease-1>", self._stop_button_motion)
+                button.bind("<Leave>", self._stop_button_motion)
+            button.grid(row=row, column=col, padx=2, pady=2)
 
-        self.btn_fwd.grid (row=0, column=1, padx=2, pady=2)
-        self.btn_left.grid(row=1, column=0, padx=2, pady=2)
-        self.btn_stop.grid(row=1, column=1, padx=2, pady=2)
-        self.btn_right.grid(row=1,column=2, padx=2, pady=2)
-        self.btn_back.grid(row=2, column=1, padx=2, pady=2)
-
-    # ── 键盘绑定（pynput 全局监听，不依赖 tkinter 焦点）────────────────────────
+    # ── 键盘绑定：WASD 手感，Twist 发布逻辑沿用官方 teleop 思路 ──────────────
     def _bind_keys(self):
-        CONTROL_KEYS = {
-            pynput_kb.KeyCode.from_char('w'), pynput_kb.KeyCode.from_char('a'),
-            pynput_kb.KeyCode.from_char('s'), pynput_kb.KeyCode.from_char('d'),
-            pynput_kb.Key.up, pynput_kb.Key.down,
-            pynput_kb.Key.left, pynput_kb.Key.right,
-            pynput_kb.Key.space,
-        }
-
-        def on_press(key):
-            try:
-                if hasattr(key, 'char') and key.char:
-                    k = key.char.lower()
-                else:
-                    k = key.name if hasattr(key, 'name') else str(key)
-                if k == 'space':
-                    self._keys_held.clear()
-                else:
-                    self._keys_held.add(k)
-            except Exception:
-                pass
-
-        def on_release(key):
-            try:
-                if hasattr(key, 'char') and key.char:
-                    k = key.char.lower()
-                else:
-                    k = key.name if hasattr(key, 'name') else str(key)
-                self._keys_held.discard(k)
-                if not self._keys_held:
-                    self.node.stop()
-            except Exception:
-                pass
-
-        self._kb_listener = pynput_kb.Listener(on_press=on_press, on_release=on_release)
-        self._kb_listener.start()
-        # 持续发送指令的定时器（50ms = 20Hz）
+        self.root.bind_all("<KeyPress>", self._on_key_press)
+        self.root.bind_all("<KeyRelease>", self._on_key_release)
+        self.root.bind_all("<FocusOut>", self._on_focus_out)
+        self.root.after(200, self._focus_keyboard)
         self._cmd_loop()
 
-    def _cmd_loop(self):
-        if self._keys_held:
-            self._apply_keys()
-        self.root.after(50, self._cmd_loop)
+    def _focus_keyboard(self):
+        self.root.focus_force()
+        self.lbl_status.config(text="键盘控制已就绪  |  WASD/方向键按住移动  |  空格/X停车")
 
-    def _apply_keys(self):
-        lin = ang = 0.0
-        spd = self.speed_var.get()
-        asp = self.ang_var.get()
+    def _normalize_key(self, event):
+        key = event.keysym
+        char = event.char
+        if char:
+            return char.lower()
+        aliases = {
+            "up": "up",
+            "down": "down",
+            "left": "left",
+            "right": "right",
+            "space": "space",
+        }
+        lowered = key.lower()
+        if lowered in aliases:
+            return aliases[lowered]
+        if len(lowered) == 1:
+            return lowered
+        return ""
+
+    def _on_key_press(self, event):
+        key = self._normalize_key(event)
+        if key in ("space", "x"):
+            self._stop_car()
+            return "break"
+
+        if key in SPEED_BINDINGS:
+            self._scale_speed(*SPEED_BINDINGS[key])
+            return "break"
+
+        if key in MOVE_KEYS:
+            self._cancel_release_job(key)
+            self._keys_held.add(key)
+            self._apply_held_keys()
+            return "break"
+
+    def _on_key_release(self, event):
+        key = self._normalize_key(event)
+        if key in MOVE_KEYS:
+            self._schedule_release(key)
+            return "break"
+
+    def _on_focus_out(self, _event):
+        self._stop_car()
+
+    def _cancel_release_job(self, key: str):
+        job = self._release_jobs.pop(key, None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+
+    def _schedule_release(self, key: str):
+        self._cancel_release_job(key)
+        self._release_jobs[key] = self.root.after(
+            KEY_RELEASE_DEBOUNCE_MS,
+            lambda k=key: self._finish_release(k),
+        )
+
+    def _finish_release(self, key: str):
+        self._release_jobs.pop(key, None)
+        self._keys_held.discard(key)
+        self._apply_held_keys()
+
+    def _cmd_loop(self):
+        if self._button_motion is not None:
+            self._set_motion(*self._button_motion)
+        elif self._keys_held:
+            self._apply_held_keys()
+        self.root.after(CMD_REPEAT_MS, self._cmd_loop)
+
+    def _scale_speed(self, linear_factor: float, angular_factor: float):
+        self.speed_var.set(round(max(0.0, min(1.0, self.speed_var.get() * linear_factor)), 2))
+        self.ang_var.set(round(max(0.0, min(2.0, self.ang_var.get() * angular_factor)), 2))
+        self.root.focus_set()
+        self.lbl_status.config(
+            text=f"当前速度  线速 {self.speed_var.get():.2f} m/s  角速 {self.ang_var.get():.2f} rad/s"
+        )
+        if self._current_linear != 0.0 or self._current_angular != 0.0:
+            self._current_linear = math.copysign(self.speed_var.get(), self._current_linear) \
+                if self._current_linear != 0.0 else 0.0
+            self._current_angular = math.copysign(self.ang_var.get(), self._current_angular) \
+                if self._current_angular != 0.0 else 0.0
+            self._publish_current_cmd()
+
+    def _apply_held_keys(self):
+        if self._button_motion is not None:
+            return
+
+        lin_sign = 0.0
+        ang_sign = 0.0
         if "w" in self._keys_held or "up" in self._keys_held:
-            lin += spd
+            lin_sign += 1.0
         if "s" in self._keys_held or "down" in self._keys_held:
-            lin -= spd
+            lin_sign -= 1.0
         if "a" in self._keys_held or "left" in self._keys_held:
-            ang += asp
+            ang_sign += 1.0
         if "d" in self._keys_held or "right" in self._keys_held:
-            ang -= asp
-        # 阿克曼：转向时给最小线速度
-        if ang != 0.0 and lin == 0.0:
-            lin = spd * 0.5
+            ang_sign -= 1.0
+        self._set_motion(
+            max(-1.0, min(1.0, lin_sign)),
+            max(-1.0, min(1.0, ang_sign)),
+        )
+
+    def _start_button_motion(self, lin_sign: float, ang_sign: float):
+        self._button_motion = (lin_sign, ang_sign)
+        self._keys_held.clear()
+        self._set_motion(lin_sign, ang_sign)
+        return "break"
+
+    def _stop_button_motion(self, _event=None):
+        if self._button_motion is not None:
+            self._button_motion = None
+            self._stop_car()
+        return "break"
+
+    def _set_motion(self, lin_sign: float, ang_sign: float):
+        self._current_linear = lin_sign * self.speed_var.get()
+        self._current_angular = ang_sign * self.ang_var.get()
+        self._publish_current_cmd()
+
+    def _publish_current_cmd(self):
+        lin = self._current_linear
+        ang = self._current_angular
         self.node.send_cmd(lin, ang)
         dirs = []
         if lin > 0: dirs.append("前进")
@@ -411,13 +746,13 @@ class CarGUI:
         self.lbl_cmd.config(text=" + ".join(dirs) if dirs else "停止",
                             fg=YELLOW if dirs else SUBTEXT)
 
-    def _manual_cmd(self, lin_sign: float, ang_sign: float):
-        spd = self.speed_var.get()
-        asp = self.ang_var.get()
-        self.node.send_cmd(lin_sign * spd, ang_sign * asp)
-        self.root.after(400, self._stop_car)
-
     def _stop_car(self):
+        for key in list(self._release_jobs):
+            self._cancel_release_job(key)
+        self._keys_held.clear()
+        self._button_motion = None
+        self._current_linear = 0.0
+        self._current_angular = 0.0
         self.node.stop()
         self.lbl_cmd.config(text="停止", fg=SUBTEXT)
 
@@ -448,37 +783,167 @@ class CarGUI:
 
     def _update(self):
         self._update_gps()
+        self._update_ue_monitor()
         self._update_camera()
         if self._recording:
             cnt = self.node.get_path_count()
             self.lbl_rec_info.config(text=f"录制中... {cnt} 个点")
 
     def _update_gps(self):
-        lat, lon, alt, status = self.node.get_gps()
+        lat, lon, alt, status, fix_time = self.node.get_gps()
         if lat is None:
-            self.lbl_lat.config(text="--", fg=SUBTEXT)
+            self.lbl_lat.config(text="等待 /fix", fg=SUBTEXT)
             self.lbl_lon.config(text="--", fg=SUBTEXT)
             self.lbl_alt.config(text="--", fg=SUBTEXT)
             self.lbl_gps_status.config(text="无信号", fg=RED)
+            self.lbl_fix_time.config(text="--", fg=SUBTEXT)
         else:
-            self.lbl_lat.config(text=f"{lat:.7f}°", fg=TEXT)
-            self.lbl_lon.config(text=f"{lon:.7f}°", fg=TEXT)
+            self.lbl_lat.config(text=f"{lat:.8f}°", fg=TEXT)
+            self.lbl_lon.config(text=f"{lon:.8f}°", fg=TEXT)
             self.lbl_alt.config(text=f"{alt:.2f} m", fg=TEXT)
             if status >= 0:
                 label = "RTK固定" if status == 2 else ("差分" if status == 1 else "单点")
                 self.lbl_gps_status.config(text=f"● {label}", fg=GREEN)
             else:
                 self.lbl_gps_status.config(text="● 无定位", fg=RED)
+            self.lbl_fix_time.config(text=self._format_age(fix_time), fg=self._age_color(fix_time, 2.5, 8.0))
+
+    def _format_age(self, ts):
+        if ts is None:
+            return "--"
+        age = max(0.0, time.time() - ts)
+        clock = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+        return f"{clock} ({age:.1f}s前)"
+
+    def _format_number(self, value, digits: int):
+        try:
+            return f"{float(value):.{digits}f}"
+        except (TypeError, ValueError):
+            return "--"
+
+    def _age_color(self, ts, fresh_sec: float, stale_sec: float):
+        if ts is None:
+            return SUBTEXT
+        age = time.time() - ts
+        if age <= fresh_sec:
+            return GREEN
+        if age <= stale_sec:
+            return YELLOW
+        return RED
+
+    def _set_text_content(self, widget: tk.Text, text: str):
+        if self._last_raw_display == text:
+            return
+        self._last_raw_display = text
+        widget.configure(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        widget.insert("1.0", text)
+        widget.configure(state=tk.DISABLED)
+
+    def _update_ue_monitor(self):
+        info = self.node.get_ue_monitor()
+        pos = info["position"] if isinstance(info["position"], dict) else None
+        now = time.time()
+
+        if info["rosbridge_checked_at"] is None:
+            self.lbl_rosbridge.config(text=f"检测中 :{ROSBRIDGE_PORT}", fg=SUBTEXT)
+            self.lbl_ros.config(text="ROS2", fg=SUBTEXT)
+        elif info["rosbridge_ok"]:
+            self.lbl_rosbridge.config(text=f"● ws://本机:{ROSBRIDGE_PORT} 可连接", fg=GREEN)
+            self.lbl_ros.config(text="ROS2 / UE通道", fg=GREEN)
+        else:
+            self.lbl_rosbridge.config(text=f"● :{ROSBRIDGE_PORT} 未监听", fg=RED)
+            self.lbl_ros.config(text="ROS2 / UE未连", fg=YELLOW)
+
+        if info["frame_time"] is None:
+            self.lbl_camera_stream.config(text=f"等待 {IMAGE_TOPIC}", fg=SUBTEXT)
+        else:
+            frame_age = now - info["frame_time"]
+            active_topic = info["image_topic_active"] or IMAGE_TOPIC
+            self.lbl_camera_stream.config(
+                text=f"● {active_topic}  {frame_age:.1f}s前",
+                fg=self._age_color(info["frame_time"], 1.5, 5.0),
+            )
+
+        if info["command_time"] is None:
+            self.lbl_ue_activity.config(text="等待 UE 发送消息", fg=SUBTEXT)
+        else:
+            age = now - info["command_time"]
+            if age <= 2.0:
+                self.lbl_ue_activity.config(text=f"● 活跃  {age:.1f}s前", fg=GREEN)
+            elif age <= 30.0:
+                self.lbl_ue_activity.config(text=f"● 空闲  {age:.1f}s前", fg=YELLOW)
+            else:
+                self.lbl_ue_activity.config(text=f"● 超时  {age:.1f}s前", fg=RED)
+        self.lbl_graph_time.config(
+            text=self._format_age(info["rosbridge_checked_at"]),
+            fg=self._age_color(info["rosbridge_checked_at"], 2.5, 8.0),
+        )
+
+        topic_status = info["topic_status"]
+        for topic, label_widget in self.topic_labels.items():
+            counts = topic_status.get(topic, {"publishers": 0, "subscribers": 0})
+            pubs = counts.get("publishers", 0)
+            subs = counts.get("subscribers", 0)
+            if topic == UE_COMMAND_TOPIC:
+                state = "等待UE发布" if pubs == 0 and info["command_time"] is None else "可接收"
+            elif topic == RTK_POS_TOPIC:
+                if pubs == 0:
+                    state = "等待坐标源"
+                elif subs <= 1:
+                    state = "输出中/等UE订阅"
+                else:
+                    state = "UE已订阅"
+            elif topic == RTK_TEXT_TOPIC:
+                state = "等待UE订阅" if subs == 0 else "UE已订阅"
+            else:
+                state = "在线" if pubs or subs else "未发现"
+            color = GREEN if pubs or subs else SUBTEXT
+            if topic == UE_COMMAND_TOPIC and info["command_time"] is not None:
+                color = self._age_color(info["command_time"], 2.0, 30.0)
+            label_widget.config(text=f"{topic}   pub:{pubs} sub:{subs}   {state}", fg=color)
+
+        if pos is None:
+            self.lbl_ue_lat.config(text="等待 /R2UTopic_Pos", fg=SUBTEXT)
+            self.lbl_ue_lon.config(text="--", fg=SUBTEXT)
+            self.lbl_ue_alt.config(text="--", fg=SUBTEXT)
+            self.lbl_ue_pos_time.config(text=self._format_age(info["position_time"]), fg=SUBTEXT)
+        else:
+            self.lbl_ue_lat.config(text=self._format_number(pos.get("latitude"), 8), fg=TEXT)
+            self.lbl_ue_lon.config(text=self._format_number(pos.get("longitude"), 8), fg=TEXT)
+            self.lbl_ue_alt.config(text=f"{self._format_number(pos.get('altitude'), 2)} m", fg=TEXT)
+            self.lbl_ue_pos_time.config(text=self._format_age(info["position_time"]), fg=GREEN)
+
+        cmd_raw = info["command_raw"]
+        if cmd_raw:
+            self.lbl_ue_cmd_time.config(text=self._format_age(info["command_time"]), fg=GREEN)
+            self.lbl_ue_cmd_summary.config(text=info["command_summary"], fg=YELLOW)
+            self._set_text_content(self.txt_ue_cmd_raw, cmd_raw)
+        else:
+            self.lbl_ue_cmd_time.config(text="等待指令", fg=SUBTEXT)
+            self.lbl_ue_cmd_summary.config(text="等待 UE 指令", fg=SUBTEXT)
+            self._set_text_content(self.txt_ue_cmd_raw, "等待 UE 发送消息...")
+
+    def _on_camera_area_configure(self, event):
+        if event.width > 1 and event.height > 1:
+            self._camera_view_size = (event.width, event.height)
+
+    def _current_camera_view_size(self):
+        w, h = self._camera_view_size
+        if w < 100 or h < 100:
+            w = self.cam_frame.winfo_width()
+            h = self.cam_frame.winfo_height()
+            if w > 1 and h > 1:
+                self._camera_view_size = (w, h)
+        return w, h
 
     def _update_camera(self):
         frame = self.node.get_frame()
         if frame is None:
             return
-        # 用父容器尺寸而非 Label 自身，避免正反馈撑大
-        w = self.cam_label.master.winfo_width()
-        h = self.cam_label.master.winfo_height()
-        if w < 10 or h < 10:
-            w, h = 640, 360
+        w, h = self._current_camera_view_size()
+        if w < 100 or h < 100:
+            return
         fh, fw = frame.shape[:2]
         scale = min(w / fw, h / fh)
         nw, nh = max(1, int(fw * scale)), max(1, int(fh * scale))
@@ -505,7 +970,7 @@ def _spin_safe(node):
 def main():
     # 1. tkinter 先初始化
     root = tk.Tk()
-    root.geometry("1000x640")
+    root.geometry("1280x760")
 
     # 2. 预加载所有字体（必须在 rclpy.init 之前，否则 X11 字体缓存冲突导致段错误）
     global FONT_TITLE, FONT_NORMAL, FONT_SMALL, FONT_CARD, FONT_BTN, FONT_MONO
@@ -528,8 +993,6 @@ def main():
 
     def on_close():
         node.stop()
-        if hasattr(app, '_kb_listener'):
-            app._kb_listener.stop()
         root.destroy()
         os._exit(0)
 
@@ -543,4 +1006,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -7,10 +7,9 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${PROJECT_ROOT}/config/robot.env"
 LOGDIR="${PROJECT_ROOT}/data/logs"
 
-[ -f /opt/ros/humble/setup.bash ] && source /opt/ros/humble/setup.bash
-[ -f "$HOME/orbbec_ws/install/setup.bash" ] && source "$HOME/orbbec_ws/install/setup.bash"
-[ -f "${PROJECT_ROOT}/src/rtk_tools/rosbridge_ts/install/setup.bash" ] && \
-    source "${PROJECT_ROOT}/src/rtk_tools/rosbridge_ts/install/setup.bash"
+[ -f "$ROS_SETUP" ] && source "$ROS_SETUP"
+[ -f "$ORBBEC_SETUP" ] && source "$ORBBEC_SETUP"
+[ -f "$ROSBRIDGE_SETUP" ] && source "$ROSBRIDGE_SETUP"
 
 pick_ue_ip() {
     local ip
@@ -28,7 +27,7 @@ HLS_URL_PATH="/robot_cam/index.m3u8"
 HLS_PREVIEW_PATH="/robot_cam/"
 
 echo "========================================"
-echo "  rosCar + RTK 全栈状态检查"
+echo "  campusCar 全栈状态检查"
 echo "========================================"
 
 # 1. 网络
@@ -44,7 +43,7 @@ fi
 echo ""
 echo "【ROS2 话题】"
 TOPICS=$(ros2 topic list 2>/dev/null)
-for t in /cmd_vel /odom /imu /battery /fix /R2UTopic_Pos /U2RTopic_Command /camera/color/image_raw /camera/color/image_flipped; do
+for t in "${CMD_VEL_TOPIC}" /odom /imu /battery "${FIX_TOPIC}" "${RTK_POS_TOPIC}" "${RTK_TEXT_TOPIC}" "${UE_COMMAND_TOPIC}" "${IMAGE_TOPIC}"; do
     if echo "$TOPICS" | grep -q "$t"; then
         echo "✅ $t"
     else
@@ -54,7 +53,7 @@ done
 
 # 3. rosbridge 端口
 echo ""
-echo "【rosbridge TCP ${ROSBRIDGE_PORT}】"
+echo "【rosbridge WebSocket ${ROSBRIDGE_PORT}】"
 if ss -tlnp 2>/dev/null | grep -q ":${ROSBRIDGE_PORT}"; then
     echo "✅ 端口 ${ROSBRIDGE_PORT} 监听中"
     [ -n "$UE_IP" ] && echo "   UE5 连接地址: $UE_IP:${ROSBRIDGE_PORT}"
@@ -103,6 +102,12 @@ pgrep -a -f "nmea_serial_driver" | head -1 && echo "✅ nmea_serial_driver" || e
 pgrep -a -f "rosbridge" | head -1 | awk '{print $1}' > /dev/null && \
     pgrep -f "rosbridge" > /dev/null && echo "✅ rosbridge" || echo "❌ rosbridge 未运行"
 pgrep -f "u2r_r2u_bridge" > /dev/null && echo "✅ u2r_r2u_bridge" || echo "❌ u2r_r2u_bridge 未运行"
+
+# 8. 控制进程
+echo ""
+echo "【控制进程】"
+pgrep -a -f "ue_bridge.py" | head -1 && echo "✅ ue_bridge" || echo "❌ ue_bridge 未运行"
+pgrep -a -f "keyboard_control.py" | head -1 && echo "✅ keyboard_control" || echo "ℹ️ keyboard_control 未运行（按需启动）"
 
 echo ""
 echo "========================================"

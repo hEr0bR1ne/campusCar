@@ -38,7 +38,7 @@ from config import TOPIC_FIX_IN, ROOT_DIR
 from core.gnss import GNSSValidator
 
 # 路径保存目录
-PATH_SAVE_DIR = ROOT_DIR / "recorded_paths"
+PATH_SAVE_DIR = ROOT_DIR / "data" / "recorded_paths"
 
 
 def gps_to_enu(lat, lon, alt, lat0, lon0, alt0):

@@ -2,7 +2,7 @@
 Type=Application
 Name=campusCar - 路径录制
 Comment=记录 GPS 路径并在 RViz 中可视化
-Exec=gnome-terminal -- bash -lc "source /opt/ros/humble/setup.bash && python3 '$HOME/campusCar/src/rtk_tools/path_recorder.py'; echo; read -p 'Press Enter to close...'"
+Exec=gnome-terminal -- bash -lc "source '$HOME/campusCar/config/robot.env' && source \"\$ROS_SETUP\" && python3 '$HOME/campusCar/src/rtk_tools/path_recorder.py'; echo; read -p 'Press Enter to close...'"
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;

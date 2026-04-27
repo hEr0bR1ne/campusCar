@@ -23,13 +23,14 @@ pkill -f "rtsp_server.py"      2>/dev/null && echo "✅ rtsp_server 已停止" |
 pkill -f "mjpeg_server.py"     2>/dev/null && echo "✅ mjpeg_server 已停止" || true
 pkill -f "mediamtx"            2>/dev/null && echo "✅ mediamtx 已停止" || true
 pkill -f "ffmpeg"              2>/dev/null && echo "✅ ffmpeg 已停止" || true
-pkill -f "image_flipper.py"    2>/dev/null && echo "✅ image_flipper 已停止" || true
 pkill -f "orbbec_camera"       2>/dev/null && echo "✅ 相机 launch 已停止" || true
+pkill -f "[c]omponent_container.*camera_container" 2>/dev/null && echo "✅ 相机容器已停止" || true
 
 echo ""
 echo "[3/3] 停止控制相关进程..."
 pkill -f "car_gui.py"          2>/dev/null && echo "✅ car_gui 已停止" || true
 pkill -f "ue_bridge.py"        2>/dev/null && echo "✅ ue_bridge 已停止" || true
+pkill -f "keyboard_control.py" 2>/dev/null && echo "✅ keyboard_control 已停止" || true
 pkill -f "move.py"             2>/dev/null && echo "✅ move.py 已停止" || true
 
 echo ""

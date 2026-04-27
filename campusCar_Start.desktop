@@ -2,7 +2,7 @@
 Type=Application
 Name=campusCar - 启动全栈
 Comment=启动小车全套服务（相机/RTK/视频流/控制GUI）
-Exec=gnome-terminal -- bash -lc "bash '$HOME/campusCar/scripts/launch_all.sh'; echo; read -p 'Press Enter to close...'"
+Exec=gnome-terminal -- bash -lc "cd /home/hkust-gz-nuc/campusCar && ./scripts/launch_all.sh; echo; read -p 'Press Enter to close...'"
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;

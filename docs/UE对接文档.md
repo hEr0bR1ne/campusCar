@@ -61,6 +61,18 @@ rtsp://192.168.100.1:8554/robot_cam
 
 `speed` 为字符串，范围 `"0"` ~ `"100"`，对应 0 ~ 1.0 m/s。
 
+通过 rosbridge WebSocket 发布时，外层使用 rosbridge 的 `publish` 包装，内层 `msg.data` 放上面的指令 JSON 字符串：
+
+```json
+{
+  "op": "publish",
+  "topic": "/U2RTopic_Command",
+  "msg": {
+    "data": "{\"commandId\":\"010\",\"commandType\":\"move\",\"RobotId\":\"Robot\",\"RobotType\":\" \",\"commandParams\":{\"destination\":\"Forward\",\"speed\":\"30\"}}"
+  }
+}
+```
+
 ---
 
 ### 方向控制
@@ -83,13 +95,13 @@ rtsp://192.168.100.1:8554/robot_cam
 {"commandId":"010","commandType":"move","RobotId":"Robot","RobotType":" ","commandParams":{"destination":"TurnBackward","speed":"30"}}
 ```
 
-> 方向控制为单次触发，持续运动需持续发送指令。发送 `speed: "0"` 可停车。
+> 方向控制现在由 NUC 端桥接节点持续补发 `/cmd_vel`，UE 发一次指令后默认最多保持 `UE_DIRECTION_TIMEOUT_SEC=0.8` 秒。按键长按/连续动作时，UE 建议按 5~10Hz 重复发送同一个指令；松开时发送任意方向配合 `speed: "0"`，或发送 `destination: "Stop"` 停车。
 
 ---
 
 ### 坐标导航
 
-`destination` 为坐标对象，x 为经度，y 为纬度：
+`destination` 为坐标对象。UE JSON 格式不需要变，默认按 x=经度、y=纬度处理：
 
 ```json
 {
@@ -111,6 +123,22 @@ rtsp://192.168.100.1:8554/robot_cam
 ```
 
 > 新的导航指令会自动取消上一个未完成的导航任务。
+
+如果 UE 发的是场景坐标，而不是 WGS84 经纬度，也保持同一个 JSON 格式，只在 NUC 的 `config/robot.env` 配置坐标转换：
+
+```bash
+UE_COORD_MODE=local
+UE_LOCAL_ORIGIN_LAT=22.00000000
+UE_LOCAL_ORIGIN_LON=113.00000000
+UE_LOCAL_ORIGIN_X=0
+UE_LOCAL_ORIGIN_Y=0
+UE_UNITS_PER_METER=100
+UE_LOCAL_ROTATION_DEG=0
+UE_LOCAL_X_SIGN=1
+UE_LOCAL_Y_SIGN=1
+```
+
+含义：`UE_LOCAL_ORIGIN_X/Y` 是 UE 场景里的锚点，`UE_LOCAL_ORIGIN_LAT/LON` 是该锚点对应的真实 RTK 坐标；`UE_UNITS_PER_METER=100` 表示 UE 默认厘米单位；`UE_LOCAL_ROTATION_DEG` 表示 UE +X 轴相对真实正东的逆时针角度，轴方向相反时把对应 `SIGN` 改成 `-1`。
 
 ---
 
