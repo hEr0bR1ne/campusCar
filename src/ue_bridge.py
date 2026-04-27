@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import shlex
+import subprocess
 import threading
 import time
 import json
@@ -28,23 +29,32 @@ def load_project_env():
     if not env_file.exists():
         return
 
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        try:
-            parts = shlex.split(line, comments=True, posix=True)
-        except ValueError:
-            continue
-        if not parts or "=" not in parts[0]:
-            continue
+    original_env = set(os.environ)
+    command = f"set -a; source {shlex.quote(str(env_file))}; env -0"
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=os.environ.copy(),
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return
 
-        key, value = parts[0].split("=", 1)
-        if not key.replace("_", "").isalnum() or key[0].isdigit():
+    for entry in result.stdout.split(b"\0"):
+        if not entry or b"=" not in entry:
             continue
-        if key in os.environ or "$(" in value or "${" in value:
+        key_b, value_b = entry.split(b"=", 1)
+        try:
+            key = key_b.decode()
+            value = value_b.decode()
+        except UnicodeDecodeError:
             continue
-        os.environ[key] = value
+        if key in original_env:
+            continue
+        if key.replace("_", "").isalnum() and not key[0].isdigit():
+            os.environ[key] = value
 
 
 load_project_env()

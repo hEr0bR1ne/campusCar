@@ -22,12 +22,11 @@
 
 ## Current Open Focus
 
-- No active engineering task has been pinned here yet.
-- When a new task starts, record:
-  - current objective
-  - constraints / assumptions
-  - files touched
-  - next recommended step after restart
+- Active objective: hardware reuse refactor for deploying the project to two additional cars with different chassis and cameras.
+- Current strategy: keep the pushed baseline on `codex/full-stack-ue-rtk-gui`; do refactor work in cloned workspace `_forks/campusCar-hardware-reuse` on branch `codex/hardware-adapter-refactor`.
+- Main design: `config/robot.env` is now a common loader; chassis/camera differences live under `config/profiles/*.env`; scripts accept `--profile NAME`.
+- Files touched include `config/robot.env`, `config/profiles/`, startup/check/stop/deploy scripts, GUI/UE config loading, docs, and memory files.
+- Next recommended step after restart: run shell/Python validation, then commit and push `codex/hardware-adapter-refactor`; after new car hardware details arrive, copy `config/profiles/template.env` into one profile per car and fill chassis/camera fields.
 
 ## Update Trigger
 

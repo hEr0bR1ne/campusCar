@@ -15,12 +15,19 @@
 
 ## Key Configuration
 
-- Primary config file: `config/robot.env`
+- Common config loader: `config/robot.env`
+- Hardware profiles: `config/profiles/*.env`
+- Default current-car profile: `config/profiles/campus_car.env`
+- Local secret overrides: `config/profiles/*.local.env` and `config/robot.local.env` (ignored by Git)
 - Important fields:
+  - `ROBOT_PROFILE`: selected hardware profile, default `campus_car`
   - `CAR_IP`: robot chassis IP, currently documented as `192.168.100.2`
   - `CAR_USER` / `CAR_PASS`: chassis SSH login
   - `SUDO_PASS`: local NUC sudo password
   - `CAR_LAUNCH_CMD`: remote ROS2 launch command for the chassis
+  - `CHASSIS_START_MODE`: `ssh_ros2`, `local_command`, or `skip`
+  - `CAMERA_START_MODE`: `ros2_launch`, `command`, or `skip`
+  - `CAMERA_DEPENDENCY_MODE`: `orbbec`, `custom`, or `none`
 
 ## Main Components
 
@@ -65,6 +72,8 @@
 ## Operational Notes
 
 - `launch_all.sh` is the normal startup path and handles cleanup, connectivity checks, remote chassis startup, camera, RTK, streaming, UE bridge, and GUI startup.
+- `launch_all.sh`, `check_all.sh`, `stop_all.sh`, `deploy_dependencies.sh`, `keyboard_control.sh`, and `open_car_gui.sh` accept `--profile NAME`.
+- Chassis and camera differences should be introduced through `config/profiles/<profile>.env` before changing shared scripts.
 - RTK serial absence should not block the rest of the stack; startup is designed to skip RTK-specific steps when unavailable.
 - Logs are documented under `data/logs/` with per-service log files such as `camera.log`, `rosbridge.log`, `ue_bridge.log`, and `mediamtx.log`.
 
@@ -73,3 +82,4 @@
 - `docs/快速启动指南.md`
 - `docs/UE对接文档.md`
 - `docs/部署调试备忘.md`
+- `docs/硬件复用指南.md`

@@ -35,10 +35,10 @@ DEFAULT_BAUD = 115200
 DEFAULT_BRIDGE_PORT = 9090
 DEFAULT_IMAGE_IN = ""
 
-# 小车连接信息（与 robot.env 保持一致）
-CAR_IP   = "192.168.100.2"
-CAR_USER = "bingda"
-CAR_PASS = "bingda"
+# 小车连接信息由 config/robot.env/profile 注入；这里仅保留兜底。
+CAR_IP   = os.environ.get("CAR_IP", "192.168.100.2")
+CAR_USER = os.environ.get("CAR_USER", "bingda")
+CAR_PASS = os.environ.get("CAR_PASS", "")
 
 # UE5 位置发送配置
 UE_PUBLISH_RATE = _env_float("UE_PUBLISH_RATE", 1.0)  # Hz - UE5 固定 1 秒一次接收位置

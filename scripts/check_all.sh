@@ -4,11 +4,41 @@
 # ============================================================
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/check_all.sh [--profile NAME]
+
+Check the full stack using config/profiles/<profile>.env.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --profile)
+            [ $# -ge 2 ] || { echo "--profile requires a value" >&2; exit 2; }
+            export ROBOT_PROFILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
 source "${PROJECT_ROOT}/config/robot.env"
 LOGDIR="${PROJECT_ROOT}/data/logs"
 
 [ -f "$ROS_SETUP" ] && source "$ROS_SETUP"
-[ -f "$ORBBEC_SETUP" ] && source "$ORBBEC_SETUP"
+for setup_file in "${CAMERA_SETUP_FILES[@]}"; do
+    [ -f "$setup_file" ] && source "$setup_file"
+done
 [ -f "$ROSBRIDGE_SETUP" ] && source "$ROSBRIDGE_SETUP"
 
 pick_ue_ip() {
@@ -29,14 +59,19 @@ HLS_PREVIEW_PATH="/robot_cam/"
 echo "========================================"
 echo "  campusCar 全栈状态检查"
 echo "========================================"
+echo "  Profile: ${ROBOT_PROFILE} (${ROBOT_NAME})"
+echo "  Chassis: ${CHASSIS_ADAPTER} / ${CHASSIS_START_MODE}"
+echo "  Camera:  ${CAMERA_ADAPTER} / ${CAMERA_START_MODE}"
 
 # 1. 网络
 echo ""
 echo "【网络】"
-if ping -c 1 -W 2 "$CAR_IP" > /dev/null 2>&1; then
-    echo "✅ 小车 ($CAR_IP): ping OK"
+if [ -z "${CAR_IP:-}" ] || [ "${CHASSIS_REQUIRED:-0}" = "0" ]; then
+    echo "ℹ️ 底盘网络检查跳过"
+elif ping -c 1 -W 2 "$CAR_IP" > /dev/null 2>&1; then
+    echo "✅ 底盘 ($CAR_IP): ping OK"
 else
-    echo "❌ 小车 ($CAR_IP): 不可达"
+    echo "❌ 底盘 ($CAR_IP): 不可达"
 fi
 
 # 2. ROS2 话题
@@ -94,6 +129,16 @@ else
     echo "❌ 端口 ${MJPEG_PORT} 未监听"
 fi
 pgrep -a -f "mjpeg_server" | head -1 && echo "✅ mjpeg_server" || echo "❌ mjpeg_server 未运行"
+
+echo ""
+echo "【相机驱动】"
+if [ -n "${CAMERA_PROCESS_PATTERN:-}" ] && pgrep -a -f "$CAMERA_PROCESS_PATTERN" | head -1; then
+    echo "✅ ${CAMERA_DRIVER_LABEL}"
+elif [ "${CAMERA_START_MODE:-skip}" = "skip" ]; then
+    echo "ℹ️ 当前 profile 未配置自动相机驱动"
+else
+    echo "❌ ${CAMERA_DRIVER_LABEL} 未运行"
+fi
 
 # 7. RTK 进程
 echo ""

@@ -21,3 +21,4 @@ __pycache__/
 
 # 敏感配置（如有本地覆盖）
 config/robot.local.env
+config/profiles/*.local.env

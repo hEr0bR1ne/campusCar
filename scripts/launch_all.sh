@@ -5,6 +5,39 @@
 # ============================================================
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/launch_all.sh [--profile NAME]
+
+Start the full campusCar stack. Hardware-specific chassis/camera settings are
+loaded from config/profiles/<profile>.env.
+
+Options:
+  --profile NAME   Robot hardware profile, default: campus_car
+  -h, --help       Show this help
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --profile)
+            [ $# -ge 2 ] || { echo "--profile requires a value" >&2; exit 2; }
+            export ROBOT_PROFILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
 source "${PROJECT_ROOT}/config/robot.env"
 
 SRC_DIR="${PROJECT_ROOT}/src"
@@ -22,24 +55,12 @@ HLS_PREVIEW_PATH="/robot_cam/"
 LIVE_RTK_LOGS="${LIVE_RTK_LOGS:-1}"
 UE_STATUS_INTERVAL="${UE_STATUS_INTERVAL:-1}"
 REUSE_CAMERA="${REUSE_CAMERA:-1}"
-RESET_ORBBEC_USB="${RESET_ORBBEC_USB:-0}"
 CAMERA_REUSE_PROBE_TIMEOUT="${CAMERA_REUSE_PROBE_TIMEOUT:-3}"
 START_GUI_EARLY="${START_GUI_EARLY:-1}"
 REFRESH_ROS_DAEMON="${REFRESH_ROS_DAEMON:-0}"
 LIVE_LOG_PIDS=()
 GUI_STARTED=0
 CAMERA_REUSE_READY=0
-ORBBEC_LAUNCH_ARGS=(
-    "enable_depth:=${ORBBEC_ENABLE_DEPTH:-false}"
-    "enable_point_cloud:=${ORBBEC_ENABLE_POINT_CLOUD:-false}"
-    "enable_colored_point_cloud:=${ORBBEC_ENABLE_COLORED_POINT_CLOUD:-false}"
-    "enable_frame_sync:=${ORBBEC_ENABLE_FRAME_SYNC:-false}"
-    "color_width:=${ORBBEC_COLOR_WIDTH:-1280}"
-    "color_height:=${ORBBEC_COLOR_HEIGHT:-720}"
-    "color_fps:=${ORBBEC_COLOR_FPS:-10}"
-    "color_format:=${ORBBEC_COLOR_FORMAT:-MJPG}"
-    "color.image_raw.enable_pub_plugins:=[\"image_transport/raw\"]"
-)
 
 mkdir -p "$LOGDIR"
 
@@ -91,7 +112,8 @@ os._exit(1)
 PY
 }
 camera_process_alive() {
-    pgrep -f "gemini_330_series.launch.py|[c]omponent_container.*camera_container|orbbec_camera" >/dev/null 2>&1
+    [ -n "${CAMERA_PROCESS_PATTERN:-}" ] || return 1
+    pgrep -f "$CAMERA_PROCESS_PATTERN" >/dev/null 2>&1
 }
 mjpeg_frame_ready() {
     local timeout_s="${1:-1}"
@@ -124,8 +146,9 @@ except Exception:
 sys.exit(1)
 PY
 }
-reset_orbbec_usb() {
-    [ "$RESET_ORBBEC_USB" = "1" ] || return 0
+reset_camera_usb() {
+    [ "$RESET_CAMERA_USB" = "1" ] || return 0
+    [ -n "${CAMERA_USB_RESET_IDS:-}" ] || return 0
 
     local reset_cmd=""
     if command -v usbreset >/dev/null 2>&1; then
@@ -136,13 +159,139 @@ reset_orbbec_usb() {
         return 0
     fi
 
-    if command -v lsusb >/dev/null 2>&1 && lsusb | grep -qi "2bc5:0807"; then
-        log "重置 Orbbec USB..."
-        "$reset_cmd" 2bc5:0807 >/dev/null 2>&1 \
-            || srun "$reset_cmd" 2bc5:0807 >/dev/null 2>&1 \
-            || warn "Orbbec USB reset 失败，继续尝试启动相机"
-        sleep 2
+    local usb_id
+    for usb_id in $CAMERA_USB_RESET_IDS; do
+        if command -v lsusb >/dev/null 2>&1 && lsusb | grep -qi "$usb_id"; then
+            log "重置 ${CAMERA_DRIVER_LABEL} USB (${usb_id})..."
+            "$reset_cmd" "$usb_id" >/dev/null 2>&1 \
+                || srun "$reset_cmd" "$usb_id" >/dev/null 2>&1 \
+                || warn "${CAMERA_DRIVER_LABEL} USB reset 失败，继续尝试启动相机"
+            sleep 2
+        fi
+    done
+}
+source_setup_files() {
+    local setup_file
+    [ -f "$ROS_SETUP" ] && source "$ROS_SETUP"
+    for setup_file in "${CAMERA_SETUP_FILES[@]}"; do
+        [ -f "$setup_file" ] && source "$setup_file"
+    done
+    [ -f "$TS_BRIDGE_SETUP" ] && source "$TS_BRIDGE_SETUP"
+}
+stop_camera_processes() {
+    local pattern
+    if [ "${#CAMERA_STOP_PATTERNS[@]}" -gt 0 ]; then
+        for pattern in "${CAMERA_STOP_PATTERNS[@]}"; do
+            [ -n "$pattern" ] && pkill -f "$pattern" 2>/dev/null || true
+        done
+    elif [ -n "${CAMERA_PROCESS_PATTERN:-}" ]; then
+        pkill -f "$CAMERA_PROCESS_PATTERN" 2>/dev/null || true
     fi
+}
+check_chassis_network() {
+    if [ "${CHASSIS_START_MODE:-skip}" = "skip" ] || [ "${CHASSIS_REQUIRED:-0}" = "0" ]; then
+        warn "当前 profile 未要求自动检查底盘网络"
+        return 0
+    fi
+    if [ -z "${CAR_IP:-}" ]; then
+        warn "当前 profile 未配置 CAR_IP，跳过底盘网络检查"
+        return 0
+    fi
+
+    log "检查底盘网络 ($CAR_IP)..."
+    if ping -c 1 -W 3 "$CAR_IP" > /dev/null 2>&1; then
+        ok "底盘网络正常"
+    else
+        err "无法 ping 通底盘，请检查交换机连接或当前 profile"
+        read -p "按 Enter 退出..."
+        exit 1
+    fi
+}
+chassis_node_running_ssh() {
+    local check_cmd="${CHASSIS_NODE_CHECK_CMD:-}"
+    if [ -z "$check_cmd" ]; then
+        if [ -n "${CHASSIS_NODE_CHECK_PATTERN:-}" ]; then
+            check_cmd="ros2 node list 2>/dev/null | grep -q ${CHASSIS_NODE_CHECK_PATTERN}"
+        else
+            return 1
+        fi
+    fi
+    sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" "$check_cmd" 2>/dev/null
+}
+start_chassis() {
+    case "${CHASSIS_START_MODE:-skip}" in
+        skip)
+            warn "当前 profile 未配置自动底盘启动，跳过底盘启动"
+            ;;
+        ssh_ros2)
+            need_cmd sshpass
+            if [ -z "${CAR_IP:-}" ] || [ -z "${CAR_USER:-}" ]; then
+                err "ssh_ros2 底盘模式需要 CAR_IP 和 CAR_USER"
+                exit 1
+            fi
+            if [ -z "${CAR_PASS:-}" ]; then
+                err "ssh_ros2 底盘模式需要 CAR_PASS；请写入 config/profiles/${ROBOT_PROFILE}.local.env"
+                exit 1
+            fi
+            log "检查底盘节点..."
+            if chassis_node_running_ssh; then
+                ok "底盘节点已运行"
+            else
+                [ -n "${CAR_LAUNCH_CMD:-}" ] || { err "未配置 CAR_LAUNCH_CMD"; exit 1; }
+                log "远程启动底盘节点..."
+                sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" \
+                    "nohup bash -lc '${CAR_LAUNCH_CMD}' > ${CHASSIS_LOG_FILE} 2>&1 &" 2>/dev/null
+                sleep 5
+                ok "底盘启动命令已发送"
+            fi
+            ;;
+        local_command)
+            [ -n "${LOCAL_CHASSIS_LAUNCH_CMD:-}" ] || { err "local_command 底盘模式需要 LOCAL_CHASSIS_LAUNCH_CMD"; exit 1; }
+            log "启动本地底盘驱动..."
+            nohup setsid bash -lc "$LOCAL_CHASSIS_LAUNCH_CMD" > "$LOGDIR/chassis.log" 2>&1 &
+            sleep 2
+            ok "本地底盘启动命令已发送"
+            ;;
+        *)
+            err "未知 CHASSIS_START_MODE: ${CHASSIS_START_MODE}"
+            exit 1
+            ;;
+    esac
+}
+start_camera_driver() {
+    case "${CAMERA_START_MODE:-skip}" in
+        skip)
+            warn "当前 profile 未配置自动相机启动，跳过相机驱动"
+            ;;
+        ros2_launch)
+            [ -n "${CAMERA_LAUNCH_PACKAGE:-}" ] || { err "ros2_launch 相机模式需要 CAMERA_LAUNCH_PACKAGE"; exit 1; }
+            [ -n "${CAMERA_LAUNCH_FILE:-}" ] || { err "ros2_launch 相机模式需要 CAMERA_LAUNCH_FILE"; exit 1; }
+            reset_camera_usb
+            log "启动 ${CAMERA_DRIVER_LABEL}..."
+            nohup setsid ros2 launch "$CAMERA_LAUNCH_PACKAGE" "$CAMERA_LAUNCH_FILE" \
+                "${CAMERA_LAUNCH_ARGS[@]}" \
+                > "$LOGDIR/camera.log" 2>&1 &
+            CAMERA_LAUNCH_PID=$!
+            sleep 2
+            if kill -0 "$CAMERA_LAUNCH_PID" 2>/dev/null; then
+                ok "${CAMERA_DRIVER_LABEL} 启动进程已拉起，视频服务将先订阅并等待首帧"
+            else
+                warn "${CAMERA_DRIVER_LABEL} 启动进程已退出，检查 $LOGDIR/camera.log"
+            fi
+            ;;
+        command)
+            [ -n "${CAMERA_LAUNCH_CMD:-}" ] || { err "command 相机模式需要 CAMERA_LAUNCH_CMD"; exit 1; }
+            reset_camera_usb
+            log "启动 ${CAMERA_DRIVER_LABEL}..."
+            nohup setsid bash -lc "$CAMERA_LAUNCH_CMD" > "$LOGDIR/camera.log" 2>&1 &
+            sleep 2
+            ok "${CAMERA_DRIVER_LABEL} 启动命令已发送"
+            ;;
+        *)
+            err "未知 CAMERA_START_MODE: ${CAMERA_START_MODE}"
+            exit 1
+            ;;
+    esac
 }
 stop_serial_claimers() {
     # brltty-udev can respawn /sbin/brltty and momentarily grab USB ACM ports.
@@ -220,18 +369,18 @@ trap stop_live_logs EXIT
 trap 'stop_live_logs; exit 130' INT
 trap 'stop_live_logs; exit 143' TERM
 
-source "$ROS_SETUP"
-[ -f "$ORBBEC_SETUP" ] && source "$ORBBEC_SETUP"
-[ -f "$TS_BRIDGE_SETUP" ] && source "$TS_BRIDGE_SETUP"
+source_setup_files
 
 UE_IP="$(pick_ue_ip)"
-need_cmd sshpass
 need_cmd ffmpeg
 need_cmd mediamtx
 
 echo "========================================"
 echo "       小车全栈启动"
 echo "========================================"
+echo "  Profile: ${ROBOT_PROFILE} (${ROBOT_NAME})"
+echo "  Chassis: ${CHASSIS_ADAPTER} / ${CHASSIS_START_MODE}"
+echo "  Camera:  ${CAMERA_ADAPTER} / ${CAMERA_START_MODE}"
 
 # ── 1. 杀掉旧进程 ────────────────────────────────────────────
 log "清理旧进程..."
@@ -250,48 +399,29 @@ pkill -f rosbridge_tcp        2>/dev/null || true
 pkill -f rosbridge_websocket  2>/dev/null || true
 pkill -f u2r_r2u_bridge.py    2>/dev/null || true
 if [ "$CAMERA_REUSE_READY" = "1" ]; then
-    log "保留已运行的 Orbbec 相机，跳过相机重启"
+    log "保留已运行的 ${CAMERA_DRIVER_LABEL}，跳过相机重启"
 else
-    pkill -f orbbec_camera        2>/dev/null || true
-    pkill -f gemini_330_series.launch.py 2>/dev/null || true
-    pkill -f "[c]omponent_container.*camera_container" 2>/dev/null || true
+    stop_camera_processes
 fi
 pkill -f mjpeg_server         2>/dev/null || true
 pkill -f rtsp_server          2>/dev/null || true
 pkill -f mediamtx             2>/dev/null || true
-pkill -f "rtsp://127.0.0.1:8554/robot_cam" 2>/dev/null || true
+pkill -f "rtsp://127.0.0.1:${RTSP_PORT}/robot_cam" 2>/dev/null || true
 pkill -f car_gui              2>/dev/null || true
 pkill -f ue_bridge            2>/dev/null || true
 pkill -f keyboard_control.py  2>/dev/null || true
-srun fuser -k 9090/tcp
-srun fuser -k 8080/tcp
-srun fuser -k 8554/tcp
-srun fuser -k 8554/udp
-srun fuser -k 8888/tcp
+srun fuser -k "${ROSBRIDGE_PORT}/tcp"
+srun fuser -k "${MJPEG_PORT}/tcp"
+srun fuser -k "${RTSP_PORT}/tcp"
+srun fuser -k "${RTSP_PORT}/udp"
+srun fuser -k "${HLS_PORT}/tcp"
 sleep 1
 
 # ── 2. 检查小车连接 ──────────────────────────────────────────
-log "检查小车网络 ($CAR_IP)..."
-if ping -c 1 -W 3 "$CAR_IP" > /dev/null 2>&1; then
-    ok "小车网络正常"
-else
-    err "无法 ping 通小车，请检查交换机连接"
-    read -p "按 Enter 退出..."
-    exit 1
-fi
+check_chassis_network
 
 # ── 3. 启动小车底盘节点（远程）───────────────────────────────
-log "检查底盘节点..."
-if sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" \
-    "ros2 node list 2>/dev/null | grep -q base_control" 2>/dev/null; then
-    ok "底盘节点已运行"
-else
-    log "远程启动底盘节点..."
-    sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" \
-        "nohup bash -lc '${CAR_LAUNCH_CMD}' > ~/ros2_base_control.log 2>&1 &" 2>/dev/null
-    sleep 5
-    ok "底盘启动命令已发送"
-fi
+start_chassis
 
 # ── 4. 验证 ROS2 话题 ────────────────────────────────────────
 log "验证 ROS2 DDS..."
@@ -301,28 +431,17 @@ if [ "$REFRESH_ROS_DAEMON" = "1" ]; then
 fi
 ros2 daemon start > /dev/null 2>&1 || true
 sleep 0.5
-if timeout 3s ros2 topic list 2>/dev/null | grep -q "/cmd_vel"; then
-    ok "/cmd_vel 在线"
+if timeout 3s ros2 topic list 2>/dev/null | grep -q "${CMD_VEL_TOPIC}"; then
+    ok "${CMD_VEL_TOPIC} 在线"
 else
-    warn "/cmd_vel 未发现，底盘可能未就绪（继续启动其他服务）"
+    warn "${CMD_VEL_TOPIC} 未发现，底盘可能未就绪（继续启动其他服务）"
 fi
 
 # ── 5. 启动相机节点 ──────────────────────────────────────────
 if [ "$CAMERA_REUSE_READY" = "1" ]; then
-    ok "复用已运行相机，跳过 Orbbec 初始化"
+    ok "复用已运行相机，跳过 ${CAMERA_DRIVER_LABEL} 初始化"
 else
-    reset_orbbec_usb
-    log "启动 Orbbec 相机..."
-    nohup setsid ros2 launch orbbec_camera gemini_330_series.launch.py \
-        "${ORBBEC_LAUNCH_ARGS[@]}" \
-        > "$LOGDIR/camera.log" 2>&1 &
-    CAMERA_LAUNCH_PID=$!
-    sleep 2
-    if kill -0 "$CAMERA_LAUNCH_PID" 2>/dev/null; then
-        ok "相机启动进程已拉起，视频服务将先订阅并等待首帧"
-    else
-        warn "相机启动进程已退出，检查 $LOGDIR/camera.log"
-    fi
+    start_camera_driver
 fi
 
 # ── 6. 提前启动视频服务，让订阅端在相机出首帧前就挂好 ─────────────
@@ -504,6 +623,7 @@ start_control_gui
 echo ""
 echo "========================================"
 echo "  全栈启动完成"
+echo "  Profile:  ${ROBOT_PROFILE} (${ROBOT_NAME})"
 echo "  GPS/UE5:  ${UE_IP:-127.0.0.1}:${ROSBRIDGE_PORT}"
 echo "  视频流:   rtsp://${UE_IP:-127.0.0.1}:${RTSP_PORT}/robot_cam"
 echo "  UE(HLS):  http://${UE_IP:-127.0.0.1}:${HLS_PORT}${HLS_URL_PATH}"

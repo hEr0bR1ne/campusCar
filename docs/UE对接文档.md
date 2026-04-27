@@ -124,7 +124,7 @@ rtsp://192.168.100.1:8554/robot_cam
 
 > 新的导航指令会自动取消上一个未完成的导航任务。
 
-如果 UE 发的是场景坐标，而不是 WGS84 经纬度，也保持同一个 JSON 格式，只在 NUC 的 `config/robot.env` 配置坐标转换：
+如果 UE 发的是场景坐标，而不是 WGS84 经纬度，也保持同一个 JSON 格式，只在 NUC 的 `config/robot.env` 或当前 `config/profiles/<profile>.env` 配置坐标转换：
 
 ```bash
 UE_COORD_MODE=local

@@ -8,6 +8,7 @@ import sys
 import os
 import shlex
 import socket
+import subprocess
 import threading
 import time
 import json
@@ -40,22 +41,32 @@ def load_project_env():
     if not env_file.exists():
         return
 
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    original_env = set(os.environ)
+    command = f"set -a; source {shlex.quote(str(env_file))}; env -0"
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=os.environ.copy(),
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return
+
+    for entry in result.stdout.split(b"\0"):
+        if not entry or b"=" not in entry:
             continue
+        key_b, value_b = entry.split(b"=", 1)
         try:
-            parts = shlex.split(line, comments=True, posix=True)
-        except ValueError:
+            key = key_b.decode()
+            value = value_b.decode()
+        except UnicodeDecodeError:
             continue
-        if not parts or "=" not in parts[0]:
+        if key in original_env:
             continue
-        key, value = parts[0].split("=", 1)
-        if not key.replace("_", "").isalnum() or key[0].isdigit():
-            continue
-        if key in os.environ or "$(" in value or "${" in value:
-            continue
-        os.environ[key] = value
+        if key.replace("_", "").isalnum() and not key[0].isdigit():
+            os.environ[key] = value
 
 
 def env_str(name: str, default: str) -> str:

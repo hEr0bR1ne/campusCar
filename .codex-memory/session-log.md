@@ -35,3 +35,6 @@
 - Confirmed current Orbbec connection is `USB2.1` at 480M and `camera.log` showed roughly 40 seconds of device initialization; USB3 cabling/port remains the hardware-side fix for cold-start latency.
 - Added `/U2RTopic_Command` compatibility in `src/rosbridge_bson_tcp.py`: if UE publishes the business command JSON as a BSON dict instead of a `std_msgs/String.data` string, the adapter converts it into the string payload before handing it to rosbridge.
 - Extended the same adapter to fix UE payloads that arrive as an extra quoted JSON object string like `"{"commandId":...}"`; the wrapper quotes are stripped before publishing to `/U2RTopic_Command`.
+- Pushed current baseline commit `c46310d` to GitHub branch `codex/full-stack-ue-rtk-gui`.
+- Created remote refactor branch `codex/hardware-adapter-refactor` and cloned it locally at `_forks/campusCar-hardware-reuse` for hardware reuse work.
+- Started hardware profile refactor: moved chassis/camera-specific settings into `config/profiles/campus_car.env`, added `config/profiles/template.env`, kept local secrets in ignored `*.local.env`, and added `--profile` support to startup/check/stop/deploy/control scripts.

@@ -4,6 +4,18 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${PROJECT_ROOT}/config/robot.env"
 
+for arg_index in "$@"; do
+    if [[ "${_EXPECT_PROFILE_VALUE:-0}" -eq 1 ]]; then
+        export ROBOT_PROFILE="$arg_index"
+        _EXPECT_PROFILE_VALUE=0
+        continue
+    fi
+    if [[ "$arg_index" == "--profile" ]]; then
+        _EXPECT_PROFILE_VALUE=1
+    fi
+done
+unset _EXPECT_PROFILE_VALUE
+
 if [[ -f "$ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$ENV_FILE"
@@ -30,9 +42,10 @@ usage() {
     cat <<'EOF'
 Usage: ./scripts/deploy_dependencies.sh [options]
 
-Install campusCar runtime dependencies, rosbridge, and Orbbec camera support.
+Install campusCar runtime dependencies, rosbridge, and profile camera support.
 
 Options:
+  --profile NAME          Robot hardware profile, default: campus_car
   --ros-distro NAME       ROS 2 distro name, default: humble
   --orbbec-repo URL       OrbbecSDK_ROS2 git URL if source is missing
   --orbbec-branch NAME    OrbbecSDK_ROS2 branch if source is missing
@@ -52,6 +65,11 @@ die() { printf '[deploy][error] %s\n' "$*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --profile)
+            [[ $# -ge 2 ]] || die "--profile requires a value"
+            export ROBOT_PROFILE="$2"
+            shift 2
+            ;;
         --ros-distro)
             [[ $# -ge 2 ]] || die "--ros-distro requires a value"
             ROS_DISTRO="$2"
@@ -257,7 +275,7 @@ run_rosdep() {
     log "Updating rosdep database"
     rosdep update || warn "rosdep update failed; apt packages may still be enough"
 
-    if [[ -d "${ORBBEC_WS}/src" ]]; then
+    if [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "orbbec" && -d "${ORBBEC_WS}/src" ]]; then
         log "Installing rosdep dependencies for Orbbec workspace"
         rosdep install --from-paths "${ORBBEC_WS}/src" --ignore-src -r -y --rosdistro "$ROS_DISTRO" \
             || warn "rosdep install reported unresolved dependencies"
@@ -343,12 +361,12 @@ build_source_rosbridge_if_present() {
 verify_install() {
     source_ros
 
-    if [[ -f "$ORBBEC_SETUP" ]]; then
+    if [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "orbbec" && -f "$ORBBEC_SETUP" ]]; then
         set +u
         # shellcheck disable=SC1090
         source "$ORBBEC_SETUP"
         set -u
-    else
+    elif [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "orbbec" ]]; then
         warn "Orbbec setup file not found: $ORBBEC_SETUP"
     fi
 
@@ -363,9 +381,13 @@ verify_install() {
         && log "rosbridge_server is available" \
         || warn "rosbridge_server is not available in the current ROS environment"
 
-    ros2 pkg prefix orbbec_camera >/dev/null 2>&1 \
-        && log "orbbec_camera is available" \
-        || warn "orbbec_camera is not available in the current ROS environment"
+    if [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "orbbec" ]]; then
+        ros2 pkg prefix orbbec_camera >/dev/null 2>&1 \
+            && log "orbbec_camera is available" \
+            || warn "orbbec_camera is not available in the current ROS environment"
+    else
+        log "Camera dependency mode is ${CAMERA_DEPENDENCY_MODE:-none}; skipping Orbbec verification"
+    fi
 
     if command -v mediamtx >/dev/null 2>&1; then
         log "mediamtx is available: $(command -v mediamtx)"
@@ -375,15 +397,27 @@ verify_install() {
 }
 
 log "Project root: ${PROJECT_ROOT}"
+log "Robot profile: ${ROBOT_PROFILE:-campus_car}"
 log "ROS distro: ${ROS_DISTRO}"
-log "Orbbec workspace: ${ORBBEC_WS}"
+log "Camera dependency mode: ${CAMERA_DEPENDENCY_MODE:-none}"
+if [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "orbbec" ]]; then
+    log "Orbbec workspace: ${ORBBEC_WS}"
+fi
 
 install_apt_packages
 install_mediamtx_if_missing
-ensure_orbbec_source
+if [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "orbbec" ]]; then
+    ensure_orbbec_source
+else
+    log "Skipping Orbbec source setup for camera dependency mode: ${CAMERA_DEPENDENCY_MODE:-none}"
+fi
 run_rosdep
-install_orbbec_udev
-build_orbbec_workspace
+if [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "orbbec" ]]; then
+    install_orbbec_udev
+    build_orbbec_workspace
+else
+    log "Add custom camera dependency setup outside this script or set CAMERA_DEPENDENCY_MODE=orbbec"
+fi
 build_source_rosbridge_if_present
 verify_install
 
