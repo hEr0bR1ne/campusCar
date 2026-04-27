@@ -31,6 +31,22 @@ def _json_string(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def _normalize_json_text(value: str) -> tuple[str, bool]:
+    text = value.strip()
+    if len(text) < 2 or text[0] != '"' or text[-1] != '"':
+        return value, False
+
+    candidate = text[1:-1].strip()
+    if not candidate or candidate[0] not in "{[":
+        return value, False
+
+    try:
+        json.loads(candidate)
+    except json.JSONDecodeError:
+        return value, False
+    return candidate, candidate != value
+
+
 def normalize_ue_command_publish(message: dict) -> tuple[dict, bool]:
     if message.get("op") != "publish" or message.get("topic") != UE_COMMAND_TOPIC:
         return message, False
@@ -43,12 +59,24 @@ def normalize_ue_command_publish(message: dict) -> tuple[dict, bool]:
             if isinstance(data, (dict, list)):
                 normalized["msg"] = {"data": _json_string(data)}
                 return normalized, True
+            if isinstance(data, str):
+                text, changed = _normalize_json_text(data)
+                if changed:
+                    normalized["msg"] = {"data": text}
+                    return normalized, True
+                return message, False
             if isinstance(data, bytes):
                 normalized["msg"] = {"data": data.decode("utf-8", errors="replace")}
                 return normalized, True
             return message, False
 
         normalized["msg"] = {"data": _json_string(msg)}
+        return normalized, True
+
+    if isinstance(msg, str):
+        text, _changed = _normalize_json_text(msg)
+        normalized = dict(message)
+        normalized["msg"] = {"data": text}
         return normalized, True
 
     if isinstance(msg, bytes):
