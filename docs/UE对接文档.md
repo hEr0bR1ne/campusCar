@@ -35,8 +35,8 @@ rtsp://192.168.100.1:8554/robot_cam
 
 ### 连接方式
 
-- 协议：rosbridge WebSocket
-- 地址：`ws://192.168.100.1:9090`
+- 协议：rosbridge TCP/BSON（兼容 UE 信息收发测试器）
+- 地址：`tcp://192.168.100.1:9090`
 - 发指令话题：`/U2RTopic_Command`（消息类型 `std_msgs/String`）
 - 接收回复话题：`/R2UTopic_Text`（消息类型 `std_msgs/String`）
 
@@ -61,7 +61,7 @@ rtsp://192.168.100.1:8554/robot_cam
 
 `speed` 为字符串，范围 `"0"` ~ `"100"`，对应 0 ~ 1.0 m/s。
 
-通过 rosbridge WebSocket 发布时，外层使用 rosbridge 的 `publish` 包装，内层 `msg.data` 放上面的指令 JSON 字符串：
+通过 rosbridge TCP/BSON 发布时，外层使用 rosbridge 的 `publish` 包装，内层 `msg.data` 放上面的指令 JSON 字符串：
 
 ```json
 {
@@ -151,4 +151,4 @@ UE_LOCAL_Y_SIGN=1
 | `8554/tcp` | RTSP（调试） |
 | `8888/tcp` | HLS（UE 接入） |
 | `8080/tcp` | MJPEG 预览（可选） |
-| `9090/tcp` | rosbridge WebSocket（指令控制） |
+| `9090/tcp` | rosbridge TCP/BSON（指令控制） |

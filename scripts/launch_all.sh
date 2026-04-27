@@ -21,7 +21,14 @@ HLS_URL_PATH="/robot_cam/index.m3u8"
 HLS_PREVIEW_PATH="/robot_cam/"
 LIVE_RTK_LOGS="${LIVE_RTK_LOGS:-1}"
 UE_STATUS_INTERVAL="${UE_STATUS_INTERVAL:-1}"
+REUSE_CAMERA="${REUSE_CAMERA:-1}"
+RESET_ORBBEC_USB="${RESET_ORBBEC_USB:-0}"
+CAMERA_REUSE_PROBE_TIMEOUT="${CAMERA_REUSE_PROBE_TIMEOUT:-3}"
+START_GUI_EARLY="${START_GUI_EARLY:-1}"
+REFRESH_ROS_DAEMON="${REFRESH_ROS_DAEMON:-0}"
 LIVE_LOG_PIDS=()
+GUI_STARTED=0
+CAMERA_REUSE_READY=0
 ORBBEC_LAUNCH_ARGS=(
     "enable_depth:=${ORBBEC_ENABLE_DEPTH:-false}"
     "enable_point_cloud:=${ORBBEC_ENABLE_POINT_CLOUD:-false}"
@@ -53,13 +60,73 @@ pick_ue_ip() {
     printf '%s\n' "$ip"
 }
 reset_log() { : > "$1"; }
-camera_stream_ready() {
-    timeout 5s ros2 node list --no-daemon --spin-time 3 2>/dev/null \
-        | grep -qx "/camera/camera" || return 1
-    timeout 5s ros2 topic info --no-daemon --spin-time 3 /camera/color/image_raw 2>/dev/null \
-        | awk '/Publisher count:/ { found=1; if (($3 + 0) > 0) ok=1 } END { exit !(found && ok) }'
+camera_frame_ready() {
+    local timeout_s="${1:-8}"
+    timeout "${timeout_s}s" python3 - "${IMAGE_TOPIC}" "$timeout_s" >/dev/null 2>&1 <<'PY'
+import sys
+import time
+import os
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image
+
+topic = sys.argv[1]
+deadline = time.monotonic() + float(sys.argv[2])
+
+class CameraProbe(Node):
+    def __init__(self):
+        super().__init__("camera_frame_probe")
+        self.create_subscription(Image, topic, self._on_image, qos_profile_sensor_data)
+
+    def _on_image(self, _msg):
+        os._exit(0)
+
+rclpy.init(args=None)
+node = CameraProbe()
+while rclpy.ok() and time.monotonic() < deadline:
+    rclpy.spin_once(node, timeout_sec=0.2)
+os._exit(1)
+PY
+}
+camera_process_alive() {
+    pgrep -f "gemini_330_series.launch.py|[c]omponent_container.*camera_container|orbbec_camera" >/dev/null 2>&1
+}
+mjpeg_frame_ready() {
+    local timeout_s="${1:-1}"
+    local url="${MJPEG_STREAM_URL:-http://127.0.0.1:${MJPEG_PORT}/stream}"
+    timeout "${timeout_s}s" python3 - "$url" "$timeout_s" >/dev/null 2>&1 <<'PY'
+import sys
+import time
+from urllib.request import Request, urlopen
+
+url = sys.argv[1]
+deadline = time.monotonic() + float(sys.argv[2])
+buf = b""
+
+try:
+    req = Request(url, headers={"User-Agent": "campusCar-launch-probe"})
+    with urlopen(req, timeout=float(sys.argv[2])) as stream:
+        while time.monotonic() < deadline:
+            chunk = stream.read(4096)
+            if not chunk:
+                break
+            buf += chunk
+            start = buf.find(b"\xff\xd8")
+            end = buf.find(b"\xff\xd9", start + 2) if start >= 0 else -1
+            if start >= 0 and end > start:
+                sys.exit(0)
+            if len(buf) > 1024 * 1024:
+                buf = buf[-1024 * 1024:]
+except Exception:
+    pass
+sys.exit(1)
+PY
 }
 reset_orbbec_usb() {
+    [ "$RESET_ORBBEC_USB" = "1" ] || return 0
+
     local reset_cmd=""
     if command -v usbreset >/dev/null 2>&1; then
         reset_cmd="$(command -v usbreset)"
@@ -130,6 +197,25 @@ stop_live_logs() {
         kill "$pid" 2>/dev/null || true
     done
 }
+start_control_gui() {
+    [ "${START_CONTROL_GUI:-1}" = "1" ] || return 0
+    if [ "$GUI_STARTED" = "1" ]; then
+        return 0
+    fi
+    if pgrep -f "$SRC_DIR/car_gui.py" >/dev/null 2>&1; then
+        GUI_STARTED=1
+        ok "控制 GUI 已运行"
+        return 0
+    fi
+
+    log "启动控制 GUI..."
+    nohup env \
+        CAR_GUI_CAMERA_SOURCE="${CAR_GUI_CAMERA_SOURCE:-auto}" \
+        MJPEG_STREAM_URL="${MJPEG_STREAM_URL:-http://127.0.0.1:${MJPEG_PORT}/stream}" \
+        python3 "$SRC_DIR/car_gui.py" \
+        > "$LOGDIR/car_gui.log" 2>&1 &
+    GUI_STARTED=1
+}
 trap stop_live_logs EXIT
 trap 'stop_live_logs; exit 130' INT
 trap 'stop_live_logs; exit 143' TERM
@@ -149,13 +235,27 @@ echo "========================================"
 
 # ── 1. 杀掉旧进程 ────────────────────────────────────────────
 log "清理旧进程..."
+if [ "$REUSE_CAMERA" = "1" ] && camera_process_alive; then
+    log "检测到已有相机进程，快速检查是否可复用..."
+    if mjpeg_frame_ready 1 || camera_frame_ready "$CAMERA_REUSE_PROBE_TIMEOUT"; then
+        CAMERA_REUSE_READY=1
+        ok "已有相机正在出图，本次启动将复用相机进程"
+    else
+        warn "已有相机进程未在 ${CAMERA_REUSE_PROBE_TIMEOUT}s 内出图，将重启相机"
+    fi
+fi
 pkill -f nmea_serial_driver   2>/dev/null || true
+pkill -f rosbridge_bson_tcp.py 2>/dev/null || true
 pkill -f rosbridge_tcp        2>/dev/null || true
 pkill -f rosbridge_websocket  2>/dev/null || true
 pkill -f u2r_r2u_bridge.py    2>/dev/null || true
-pkill -f orbbec_camera        2>/dev/null || true
-pkill -f gemini_330_series.launch.py 2>/dev/null || true
-pkill -f "[c]omponent_container.*camera_container" 2>/dev/null || true
+if [ "$CAMERA_REUSE_READY" = "1" ]; then
+    log "保留已运行的 Orbbec 相机，跳过相机重启"
+else
+    pkill -f orbbec_camera        2>/dev/null || true
+    pkill -f gemini_330_series.launch.py 2>/dev/null || true
+    pkill -f "[c]omponent_container.*camera_container" 2>/dev/null || true
+fi
 pkill -f mjpeg_server         2>/dev/null || true
 pkill -f rtsp_server          2>/dev/null || true
 pkill -f mediamtx             2>/dev/null || true
@@ -195,113 +295,37 @@ fi
 
 # ── 4. 验证 ROS2 话题 ────────────────────────────────────────
 log "验证 ROS2 DDS..."
-ros2 daemon stop > /dev/null 2>&1; sleep 1; ros2 daemon start > /dev/null 2>&1; sleep 2
-if ros2 topic list 2>/dev/null | grep -q "/cmd_vel"; then
+if [ "$REFRESH_ROS_DAEMON" = "1" ]; then
+    ros2 daemon stop > /dev/null 2>&1
+    sleep 1
+fi
+ros2 daemon start > /dev/null 2>&1 || true
+sleep 0.5
+if timeout 3s ros2 topic list 2>/dev/null | grep -q "/cmd_vel"; then
     ok "/cmd_vel 在线"
 else
     warn "/cmd_vel 未发现，底盘可能未就绪（继续启动其他服务）"
 fi
 
 # ── 5. 启动相机节点 ──────────────────────────────────────────
-reset_orbbec_usb
-log "启动 Orbbec 相机..."
-nohup setsid ros2 launch orbbec_camera gemini_330_series.launch.py \
-    "${ORBBEC_LAUNCH_ARGS[@]}" \
-    > "$LOGDIR/camera.log" 2>&1 &
-CAMERA_LAUNCH_PID=$!
-log "等待相机就绪..."
-for i in $(seq 1 20); do
-    sleep 1
-    if camera_stream_ready; then
-        ok "相机图像已发布"
-        break
-    fi
-    if ! kill -0 "$CAMERA_LAUNCH_PID" 2>/dev/null; then
-        warn "相机启动进程已退出，检查 $LOGDIR/camera.log"
-        break
-    fi
-    if [ "$i" -eq 20 ]; then
-        warn "相机图像未发布，检查 $LOGDIR/camera.log"
-    fi
-done
-
-# ── 6. 启动 RTK（串口自动识别）──────────────────────────────
-log "启动 RTK 全栈..."
-reset_log "$RTK_DRIVER_LOG"
-reset_log "$ROSBRIDGE_LOG"
-reset_log "$RTK_UE_BRIDGE_LOG"
-reset_log "$U2R_COMMAND_LOG"
-if [ "$LIVE_RTK_LOGS" = "1" ]; then
-    log "实时显示 RTK/rosbridge/UE 输出（LIVE_RTK_LOGS=0 可关闭）"
-    start_live_ue_status "$U2R_COMMAND_LOG"
-fi
-stop_serial_claimers
-
-SERIAL_PORT=""
-for p in /dev/serial/by-id/* /dev/ttyACM* /dev/ttyUSB*; do
-    [ -e "$p" ] || continue
-    srun stty -F "$p" "${RTK_BAUD}" raw -echo -ixon -ixoff -crtscts 2>/dev/null || continue
-    gga=$(srun timeout 1s cat "$p" 2>/dev/null | strings | grep '^\$GNGGA' | head -n1 || true)
-    if [ -n "$gga" ]; then SERIAL_PORT="$p"; break; fi
-done
-
-if [ -n "$SERIAL_PORT" ]; then
-    ok "RTK 串口: $SERIAL_PORT"
-    srun chmod 666 "$SERIAL_PORT"
-    start_live_log "rtk-driver" "$RTK_DRIVER_LOG"
-    nohup setsid ros2 run nmea_navsat_driver nmea_serial_driver \
-        --ros-args -p port:="$SERIAL_PORT" -p baud:="${RTK_BAUD}" \
-        > "$RTK_DRIVER_LOG" 2>&1 &
-    sleep 1
-    ok "RTK /fix 数据源已启动"
+if [ "$CAMERA_REUSE_READY" = "1" ]; then
+    ok "复用已运行相机，跳过 Orbbec 初始化"
 else
-    warn "未找到 RTK 串口，/fix 数据源跳过；rosbridge 和 UE 数据通道仍会启动"
-fi
-
-# ── 7. 启动 RTK / UE 数据流 ────────────────────────────────
-log "启动 rosbridge WebSocket 数据通道 (${ROSBRIDGE_PORT})..."
-if ros2 pkg prefix rosbridge_server >/dev/null 2>&1; then
-    start_live_log "rosbridge" "$ROSBRIDGE_LOG"
-    nohup ros2 launch rosbridge_server rosbridge_websocket_launch.xml \
-        port:="${ROSBRIDGE_PORT}" address:=0.0.0.0 \
-        > "$ROSBRIDGE_LOG" 2>&1 &
-    sleep 3
-
-    if ss -tln 2>/dev/null | grep -q ":${ROSBRIDGE_PORT}"; then
-        ok "rosbridge WebSocket 已监听 ${ROSBRIDGE_PORT}"
+    reset_orbbec_usb
+    log "启动 Orbbec 相机..."
+    nohup setsid ros2 launch orbbec_camera gemini_330_series.launch.py \
+        "${ORBBEC_LAUNCH_ARGS[@]}" \
+        > "$LOGDIR/camera.log" 2>&1 &
+    CAMERA_LAUNCH_PID=$!
+    sleep 2
+    if kill -0 "$CAMERA_LAUNCH_PID" 2>/dev/null; then
+        ok "相机启动进程已拉起，视频服务将先订阅并等待首帧"
     else
-        warn "rosbridge WebSocket 未监听，检查 $ROSBRIDGE_LOG"
+        warn "相机启动进程已退出，检查 $LOGDIR/camera.log"
     fi
-else
-    warn "未找到 rosbridge_server 包，请先运行 ./scripts/deploy_dependencies.sh"
 fi
 
-log "启动 RTK/UE 数据桥..."
-start_live_log "rtk-ue" "$RTK_UE_BRIDGE_LOG"
-RTK_IMAGE_ARGS=()
-if [ -n "${RTK_IMAGE_IN_TOPIC:-}" ]; then
-    RTK_IMAGE_ARGS=(--image-in "${RTK_IMAGE_IN_TOPIC}" --image-out "${RTK_IMAGE_TOPIC}")
-fi
-nohup env \
-    PYTHONUNBUFFERED=1 \
-    UE_PUBLISH_RATE="${UE_PUBLISH_RATE:-1.0}" \
-    RTK_RX_LOG_RATE="${RTK_RX_LOG_RATE:-0}" \
-    python3 "$SRC_DIR/rtk_tools/u2r_r2u_bridge.py" \
-    --fix-in "${FIX_TOPIC}" \
-    --pos-out "${RTK_POS_TOPIC}" \
-    --cmd-in "${UE_COMMAND_TOPIC}" \
-    --text-out "${RTK_TEXT_TOPIC}" \
-    --logfile "$U2R_COMMAND_LOG" \
-    "${RTK_IMAGE_ARGS[@]}" \
-    > "$RTK_UE_BRIDGE_LOG" 2>&1 &
-sleep 1
-if pgrep -f "$SRC_DIR/rtk_tools/u2r_r2u_bridge.py" > /dev/null; then
-    ok "RTK/UE 数据流已启动：${FIX_TOPIC} → ${RTK_POS_TOPIC}，${UE_COMMAND_TOPIC} → 日志"
-else
-    warn "RTK/UE 数据桥启动失败，检查 $RTK_UE_BRIDGE_LOG"
-fi
-
-# ── 8. 启动 RTSP 推流 ───────────────────────────────────────
+# ── 6. 提前启动视频服务，让订阅端在相机出首帧前就挂好 ─────────────
 if [ ! -f "$RTSP_CONFIG" ]; then
     err "RTSP 配置文件不存在: $RTSP_CONFIG"
     exit 1
@@ -335,7 +359,6 @@ ok "RTSP 地址 → rtsp://${UE_IP:-127.0.0.1}:${RTSP_PORT}/robot_cam"
 ok "UE(HLS) → http://${UE_IP:-127.0.0.1}:${HLS_PORT}${HLS_URL_PATH}"
 ok "HLS预览 → http://${UE_IP:-127.0.0.1}:${HLS_PORT}${HLS_PREVIEW_PATH}"
 
-# ── 9. 启动 MJPEG 浏览器预览 ────────────────────────────────
 log "启动 MJPEG 浏览器预览 (${MJPEG_PORT})..."
 nohup python3 "$SRC_DIR/mjpeg_server.py" \
     --topic "${IMAGE_TOPIC}" \
@@ -349,7 +372,98 @@ else
     exit 1
 fi
 
-# ── 10. 启动 UE 指令桥接 ────────────────────────────────────
+if [ "$START_GUI_EARLY" = "1" ]; then
+    start_control_gui
+fi
+
+CAMERA_FIRST_FRAME_TIMEOUT="${CAMERA_FIRST_FRAME_TIMEOUT:-8}"
+if [ "$CAMERA_FIRST_FRAME_TIMEOUT" != "0" ]; then
+    log "快速检查相机首帧（最多 ${CAMERA_FIRST_FRAME_TIMEOUT}s，超时继续启动）..."
+    if camera_frame_ready "$CAMERA_FIRST_FRAME_TIMEOUT"; then
+        ok "相机首帧已收到"
+    else
+        warn "暂未收到相机首帧，继续启动；后续画面会在相机发布后自动出现"
+    fi
+fi
+
+# ── 7. 启动 RTK（串口自动识别）──────────────────────────────
+log "启动 RTK 全栈..."
+reset_log "$RTK_DRIVER_LOG"
+reset_log "$ROSBRIDGE_LOG"
+reset_log "$RTK_UE_BRIDGE_LOG"
+reset_log "$U2R_COMMAND_LOG"
+if [ "$LIVE_RTK_LOGS" = "1" ]; then
+    log "实时显示 RTK/rosbridge/UE 输出（LIVE_RTK_LOGS=0 可关闭）"
+    start_live_ue_status "$U2R_COMMAND_LOG"
+fi
+stop_serial_claimers
+
+SERIAL_PORT=""
+for p in /dev/serial/by-id/* /dev/ttyACM* /dev/ttyUSB*; do
+    [ -e "$p" ] || continue
+    srun stty -F "$p" "${RTK_BAUD}" raw -echo -ixon -ixoff -crtscts 2>/dev/null || continue
+    gga=$(srun timeout 1s cat "$p" 2>/dev/null | strings | grep '^\$GNGGA' | head -n1 || true)
+    if [ -n "$gga" ]; then SERIAL_PORT="$p"; break; fi
+done
+
+if [ -n "$SERIAL_PORT" ]; then
+    ok "RTK 串口: $SERIAL_PORT"
+    srun chmod 666 "$SERIAL_PORT"
+    start_live_log "rtk-driver" "$RTK_DRIVER_LOG"
+    nohup setsid ros2 run nmea_navsat_driver nmea_serial_driver \
+        --ros-args -p port:="$SERIAL_PORT" -p baud:="${RTK_BAUD}" \
+        > "$RTK_DRIVER_LOG" 2>&1 &
+    sleep 1
+    ok "RTK /fix 数据源已启动"
+else
+    warn "未找到 RTK 串口，/fix 数据源跳过；rosbridge 和 UE 数据通道仍会启动"
+fi
+
+# ── 8. 启动 RTK / UE 数据流 ────────────────────────────────
+log "启动 rosbridge TCP/BSON 兼容数据通道 (${ROSBRIDGE_PORT})..."
+if python3 -c "import rosbridge_library, rosbridge_server" >/dev/null 2>&1; then
+    start_live_log "rosbridge" "$ROSBRIDGE_LOG"
+    nohup python3 "$SRC_DIR/rosbridge_bson_tcp.py" \
+        --port "${ROSBRIDGE_PORT}" \
+        --address 0.0.0.0 \
+        > "$ROSBRIDGE_LOG" 2>&1 &
+    sleep 3
+
+    if ss -tln 2>/dev/null | grep -q ":${ROSBRIDGE_PORT}"; then
+        ok "rosbridge TCP/BSON 已监听 ${ROSBRIDGE_PORT}"
+    else
+        warn "rosbridge TCP/BSON 未监听，检查 $ROSBRIDGE_LOG"
+    fi
+else
+    warn "未找到 rosbridge_server 包，请先运行 ./scripts/deploy_dependencies.sh"
+fi
+
+log "启动 RTK/UE 数据桥..."
+start_live_log "rtk-ue" "$RTK_UE_BRIDGE_LOG"
+RTK_IMAGE_ARGS=()
+if [ -n "${RTK_IMAGE_IN_TOPIC:-}" ]; then
+    RTK_IMAGE_ARGS=(--image-in "${RTK_IMAGE_IN_TOPIC}" --image-out "${RTK_IMAGE_TOPIC}")
+fi
+nohup env \
+    PYTHONUNBUFFERED=1 \
+    UE_PUBLISH_RATE="${UE_PUBLISH_RATE:-1.0}" \
+    RTK_RX_LOG_RATE="${RTK_RX_LOG_RATE:-0}" \
+    python3 "$SRC_DIR/rtk_tools/u2r_r2u_bridge.py" \
+    --fix-in "${FIX_TOPIC}" \
+    --pos-out "${RTK_POS_TOPIC}" \
+    --cmd-in "${UE_COMMAND_TOPIC}" \
+    --text-out "${RTK_TEXT_TOPIC}" \
+    --logfile "$U2R_COMMAND_LOG" \
+    "${RTK_IMAGE_ARGS[@]}" \
+    > "$RTK_UE_BRIDGE_LOG" 2>&1 &
+sleep 1
+if pgrep -f "$SRC_DIR/rtk_tools/u2r_r2u_bridge.py" > /dev/null; then
+    ok "RTK/UE 数据流已启动：${FIX_TOPIC} → ${RTK_POS_TOPIC}，${UE_COMMAND_TOPIC} → 日志"
+else
+    warn "RTK/UE 数据桥启动失败，检查 $RTK_UE_BRIDGE_LOG"
+fi
+
+# ── 9. 启动 UE 指令桥接 ────────────────────────────────────
 log "启动 UE 指令桥接..."
 nohup env \
     PYTHONUNBUFFERED=1 \
@@ -384,10 +498,8 @@ else
     err "UE 指令桥接启动失败，检查 $LOGDIR/ue_bridge.log"
 fi
 
-# ── 11. 启动控制 GUI ─────────────────────────────────────────
-log "启动控制 GUI..."
-sleep 1
-python3 "$SRC_DIR/car_gui.py" &
+# ── 10. 启动控制 GUI ─────────────────────────────────────────
+start_control_gui
 
 echo ""
 echo "========================================"
@@ -398,7 +510,7 @@ echo "  UE(HLS):  http://${UE_IP:-127.0.0.1}:${HLS_PORT}${HLS_URL_PATH}"
 echo "  HLS页:    http://${UE_IP:-127.0.0.1}:${HLS_PORT}${HLS_PREVIEW_PATH}"
 echo "  浏览器:   http://${UE_IP:-127.0.0.1}:${MJPEG_PORT}/"
 echo "  RTK位置:  ${RTK_POS_TOPIC} (${UE_PUBLISH_RATE:-1.0}Hz)"
-echo "  UE指令:   ws://${UE_IP:-127.0.0.1}:${ROSBRIDGE_PORT}  →  ${UE_COMMAND_TOPIC}"
+echo "  UE指令:   tcp://${UE_IP:-127.0.0.1}:${ROSBRIDGE_PORT}  →  ${UE_COMMAND_TOPIC}"
 echo "  RTK串口:  ${SERIAL_PORT:-未检测到}"
 if [ "$LIVE_RTK_LOGS" = "1" ]; then
     echo "  实时日志:  已显示 RTK/rosbridge 输出"

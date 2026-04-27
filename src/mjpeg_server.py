@@ -18,6 +18,7 @@ from socketserver import ThreadingMixIn
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, CompressedImage
 import cv2
 import numpy as np
@@ -35,9 +36,10 @@ _frame_event = threading.Event()
 class CameraNode(Node):
     def __init__(self, topic: str):
         super().__init__("mjpeg_server_node")
-        self.create_subscription(Image, topic, self._on_image, 10)
+        image_qos = qos_profile_sensor_data
+        self.create_subscription(Image, topic, self._on_image, image_qos)
         compressed = topic.rstrip("/") + "/compressed"
-        self.create_subscription(CompressedImage, compressed, self._on_compressed, 10)
+        self.create_subscription(CompressedImage, compressed, self._on_compressed, image_qos)
         self.get_logger().info(f"订阅话题: {topic}")
 
     def _on_image(self, msg: Image):

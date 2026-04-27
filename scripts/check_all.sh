@@ -53,7 +53,7 @@ done
 
 # 3. rosbridge 端口
 echo ""
-echo "【rosbridge WebSocket ${ROSBRIDGE_PORT}】"
+echo "【rosbridge TCP/BSON ${ROSBRIDGE_PORT}】"
 if ss -tlnp 2>/dev/null | grep -q ":${ROSBRIDGE_PORT}"; then
     echo "✅ 端口 ${ROSBRIDGE_PORT} 监听中"
     [ -n "$UE_IP" ] && echo "   UE5 连接地址: $UE_IP:${ROSBRIDGE_PORT}"

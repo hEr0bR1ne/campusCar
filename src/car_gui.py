@@ -12,12 +12,15 @@ import threading
 import time
 import json
 import math
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 from pathlib import Path
 from datetime import datetime
 
 # ── ROS2 ──────────────────────────────────────────────────────────────────────
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import NavSatFix, Image, CompressedImage
 from std_msgs.msg import String
@@ -67,6 +70,20 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, ""))
+    except ValueError:
+        return default
+
+
+def env_list(name: str) -> list[str]:
+    value = os.getenv(name, "")
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 load_project_env()
 
 CAR_IP          = env_str("CAR_IP", "192.168.100.2")
@@ -75,11 +92,7 @@ FIX_TOPIC       = env_str("FIX_TOPIC", "/fix")
 IMAGE_TOPIC     = env_str("IMAGE_TOPIC", "/camera/color/image_raw")
 IMAGE_TOPIC_CANDIDATES = list(dict.fromkeys([
     IMAGE_TOPIC,
-    "/camera/color/image_raw",
-    "/camera/color/image",
-    "/camera/image_raw",
-    "/color/image_raw",
-    "/usb_cam/image_raw",
+    *env_list("IMAGE_TOPIC_ALIASES"),
 ]))
 COMPRESSED_TOPIC_CANDIDATES = list(dict.fromkeys([
     f"{topic}/compressed" for topic in IMAGE_TOPIC_CANDIDATES
@@ -88,6 +101,13 @@ UE_COMMAND_TOPIC = env_str("UE_COMMAND_TOPIC", "/U2RTopic_Command")
 RTK_POS_TOPIC    = env_str("RTK_POS_TOPIC", "/R2UTopic_Pos")
 RTK_TEXT_TOPIC   = env_str("RTK_TEXT_TOPIC", "/R2UTopic_Text")
 ROSBRIDGE_PORT   = env_int("ROSBRIDGE_PORT", 9090)
+MJPEG_PORT       = env_int("MJPEG_PORT", 8080)
+CAMERA_GUI_SOURCE = env_str("CAR_GUI_CAMERA_SOURCE", env_str("CAMERA_GUI_SOURCE", "auto")).lower()
+MJPEG_STREAM_URL = env_str("MJPEG_STREAM_URL", f"http://127.0.0.1:{MJPEG_PORT}/stream")
+MJPEG_CONNECT_TIMEOUT_SEC = env_float("MJPEG_CONNECT_TIMEOUT_SEC", 1.5)
+MJPEG_RECONNECT_SEC = env_float("MJPEG_RECONNECT_SEC", 0.5)
+MJPEG_BUFFER_LIMIT = 2 * 1024 * 1024
+CAMERA_WAIT_LABEL = "MJPEG/ROS 图像" if CAMERA_GUI_SOURCE in ("auto", "mjpeg", "http") else IMAGE_TOPIC
 
 LINEAR_SPEED    = 0.3   # m/s
 ANGULAR_SPEED   = 0.5   # rad/s
@@ -159,7 +179,10 @@ class CarNode(Node):
         self.topic_status = {}
         self.rosbridge_ok = False
         self.rosbridge_checked_at = None
+        self._shutdown = threading.Event()
+        self._last_mjpeg_warning = 0.0
         self._lock = threading.Lock()
+        image_qos = qos_profile_sensor_data
 
         # 路径录制
         self.recording = False
@@ -170,21 +193,26 @@ class CarNode(Node):
         self.create_subscription(String, RTK_POS_TOPIC, self._on_ue_position, 10)
         self.create_subscription(String, UE_COMMAND_TOPIC, self._on_ue_command, 10)
 
-        # 订阅图像（尝试多个常见话题，避免 launch 文件改名后 GUI 黑屏）
+        # 订阅图像。默认只挂配置话题，避免创建多余 DDS endpoint 拖慢首帧发现。
         for topic in IMAGE_TOPIC_CANDIDATES:
             self.create_subscription(
                 Image,
                 topic,
                 lambda msg, image_topic=topic: self._on_image_raw(msg, image_topic),
-                10,
+                image_qos,
             )
         for topic in COMPRESSED_TOPIC_CANDIDATES:
             self.create_subscription(
                 CompressedImage,
                 topic,
                 lambda msg, image_topic=topic: self._on_image_compressed(msg, image_topic),
-                10,
+                image_qos,
             )
+        if CAMERA_GUI_SOURCE in ("auto", "mjpeg", "http"):
+            self._mjpeg_thread = threading.Thread(target=self._mjpeg_loop, daemon=True)
+            self._mjpeg_thread.start()
+        else:
+            self._mjpeg_thread = None
         self.create_timer(1.0, self._refresh_runtime_status)
 
     # ── 回调 ──────────────────────────────────────────────────────────────────
@@ -201,19 +229,59 @@ class CarNode(Node):
     def _on_image_raw(self, msg: Image, topic: str):
         frame = self._decode_raw(msg)
         if frame is not None:
-            with self._lock:
-                self.latest_frame = frame
-                self.frame_time = time.time()
-                self.image_topic_active = topic
+            self._store_frame(frame, topic)
 
     def _on_image_compressed(self, msg: CompressedImage, topic: str):
         data = np.frombuffer(msg.data, dtype=np.uint8)
         frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
         if frame is not None:
-            with self._lock:
-                self.latest_frame = frame
-                self.frame_time = time.time()
-                self.image_topic_active = topic
+            self._store_frame(frame, topic)
+
+    def _store_frame(self, frame, source: str):
+        with self._lock:
+            self.latest_frame = frame
+            self.frame_time = time.time()
+            self.image_topic_active = source
+
+    def _mjpeg_loop(self):
+        source_label = f"MJPEG {MJPEG_STREAM_URL}"
+        while not self._shutdown.is_set():
+            try:
+                req = Request(MJPEG_STREAM_URL, headers={"User-Agent": "campusCar-GUI"})
+                with urlopen(req, timeout=MJPEG_CONNECT_TIMEOUT_SEC) as stream:
+                    buf = b""
+                    while not self._shutdown.is_set():
+                        chunk = stream.read(8192)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        while True:
+                            start = buf.find(b"\xff\xd8")
+                            if start < 0:
+                                if len(buf) > 4096:
+                                    buf = buf[-4096:]
+                                break
+                            end = buf.find(b"\xff\xd9", start + 2)
+                            if end < 0:
+                                if start > 0:
+                                    buf = buf[start:]
+                                if len(buf) > MJPEG_BUFFER_LIMIT:
+                                    buf = buf[-MJPEG_BUFFER_LIMIT:]
+                                break
+                            jpeg = buf[start:end + 2]
+                            buf = buf[end + 2:]
+                            frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                            if frame is not None:
+                                self._store_frame(frame, source_label)
+            except (OSError, URLError, TimeoutError, ValueError):
+                now = time.time()
+                if now - self._last_mjpeg_warning > 10.0:
+                    self.get_logger().info(f"等待 MJPEG 图像源: {MJPEG_STREAM_URL}")
+                    self._last_mjpeg_warning = now
+            self._shutdown.wait(MJPEG_RECONNECT_SEC)
+
+    def shutdown(self):
+        self._shutdown.set()
 
     def _on_ue_position(self, msg: String):
         now = time.time()
@@ -849,14 +917,14 @@ class CarGUI:
             self.lbl_rosbridge.config(text=f"检测中 :{ROSBRIDGE_PORT}", fg=SUBTEXT)
             self.lbl_ros.config(text="ROS2", fg=SUBTEXT)
         elif info["rosbridge_ok"]:
-            self.lbl_rosbridge.config(text=f"● ws://本机:{ROSBRIDGE_PORT} 可连接", fg=GREEN)
+            self.lbl_rosbridge.config(text=f"● tcp://本机:{ROSBRIDGE_PORT} 可连接", fg=GREEN)
             self.lbl_ros.config(text="ROS2 / UE通道", fg=GREEN)
         else:
             self.lbl_rosbridge.config(text=f"● :{ROSBRIDGE_PORT} 未监听", fg=RED)
             self.lbl_ros.config(text="ROS2 / UE未连", fg=YELLOW)
 
         if info["frame_time"] is None:
-            self.lbl_camera_stream.config(text=f"等待 {IMAGE_TOPIC}", fg=SUBTEXT)
+            self.lbl_camera_stream.config(text=f"等待 {CAMERA_WAIT_LABEL}", fg=SUBTEXT)
         else:
             frame_age = now - info["frame_time"]
             active_topic = info["image_topic_active"] or IMAGE_TOPIC
@@ -992,6 +1060,7 @@ def main():
     ros_thread.start()
 
     def on_close():
+        node.shutdown()
         node.stop()
         root.destroy()
         os._exit(0)

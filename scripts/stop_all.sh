@@ -15,6 +15,7 @@ echo ""
 echo "[1/3] 停止 RTK 全栈..."
 pkill -f "nmea_serial_driver"  2>/dev/null && echo "✅ nmea_serial_driver 已停止" || true
 pkill -f "rosbridge"           2>/dev/null && echo "✅ rosbridge 已停止" || true
+pkill -f "rosbridge_bson_tcp.py" 2>/dev/null && echo "✅ rosbridge_bson_tcp 已停止" || true
 pkill -f "u2r_r2u_bridge.py"  2>/dev/null && echo "✅ u2r_r2u_bridge 已停止" || true
 
 echo ""
