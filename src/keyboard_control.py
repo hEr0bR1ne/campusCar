@@ -9,6 +9,7 @@ import tty
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from motion_profile import shape_twist_for_base
 
 
 KEYMAP = {
@@ -29,6 +30,7 @@ class KeyboardControl(Node):
         self.pub = self.create_publisher(Twist, topic, 10)
 
     def publish_cmd(self, linear: float, angular: float):
+        linear, angular = shape_twist_for_base(linear, angular)
         msg = Twist()
         msg.linear.x = float(linear)
         msg.angular.z = float(angular)

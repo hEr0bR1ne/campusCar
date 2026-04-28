@@ -86,6 +86,35 @@ for t in "${CMD_VEL_TOPIC}" /odom /imu /battery "${FIX_TOPIC}" "${RTK_POS_TOPIC}
     fi
 done
 
+# 2.5 相机
+echo ""
+echo "【相机 (${CAMERA_MODE:-orbbec})】"
+case "${CAMERA_MODE:-orbbec}" in
+    hikrobot|hikrobot_gige|hikrobot_gige_aravis|aravis|camera_aravis2)
+        ros2 pkg prefix camera_aravis2 >/dev/null 2>&1 && echo "✅ camera_aravis2 已安装" || echo "❌ camera_aravis2 未安装"
+        command -v arv-tool-0.8 >/dev/null 2>&1 && echo "✅ arv-tool-0.8 已安装" || echo "❌ arv-tool-0.8 未安装"
+        if pgrep -a -f "[c]amera_driver_gv" >/tmp/campuscar_hikrobot_camera_pgrep.$$ 2>/dev/null; then
+            head -1 /tmp/campuscar_hikrobot_camera_pgrep.$$
+            echo "✅ Hikrobot/Aravis 相机节点"
+        else
+            echo "❌ Hikrobot/Aravis 相机节点未运行"
+        fi
+        rm -f /tmp/campuscar_hikrobot_camera_pgrep.$$
+        ;;
+    none)
+        echo "ℹ️ CAMERA_MODE=none，未要求启动相机节点"
+        ;;
+    *)
+        if pgrep -a -f "gemini_330_series.launch.py|[c]omponent_container.*camera_container|orbbec_camera" >/tmp/campuscar_orbbec_camera_pgrep.$$ 2>/dev/null; then
+            head -1 /tmp/campuscar_orbbec_camera_pgrep.$$
+            echo "✅ Orbbec 相机节点"
+        else
+            echo "❌ Orbbec 相机节点未运行"
+        fi
+        rm -f /tmp/campuscar_orbbec_camera_pgrep.$$
+        ;;
+esac
+
 # 3. rosbridge 端口
 echo ""
 echo "【rosbridge TCP/BSON ${ROSBRIDGE_PORT}】"
@@ -132,6 +161,10 @@ pgrep -a -f "mjpeg_server" | head -1 && echo "✅ mjpeg_server" || echo "❌ mjp
 
 echo ""
 echo "【相机驱动】"
+if [ "${CAMERA_DEPENDENCY_MODE:-none}" = "hikrobot_aravis" ]; then
+    ros2 pkg prefix camera_aravis2 >/dev/null 2>&1 && echo "✅ camera_aravis2 已安装" || echo "❌ camera_aravis2 未安装"
+    command -v arv-tool-0.8 >/dev/null 2>&1 && echo "✅ arv-tool-0.8 已安装" || echo "❌ arv-tool-0.8 未安装"
+fi
 if [ -n "${CAMERA_PROCESS_PATTERN:-}" ] && pgrep -a -f "$CAMERA_PROCESS_PATTERN" | head -1; then
     echo "✅ ${CAMERA_DRIVER_LABEL}"
 elif [ "${CAMERA_START_MODE:-skip}" = "skip" ]; then

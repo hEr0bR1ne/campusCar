@@ -21,6 +21,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, QuaternionStamped
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
+from motion_profile import shape_twist_for_base
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 
@@ -452,6 +453,7 @@ class UEBridgeNode(Node):
     # ── 工具 ──────────────────────────────────────────────────────────────────
 
     def _publish_twist(self, linear: float, angular: float):
+        linear, angular = shape_twist_for_base(linear, angular)
         t = Twist()
         t.linear.x  = linear
         t.angular.z = angular

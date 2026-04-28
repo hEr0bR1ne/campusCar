@@ -38,3 +38,14 @@
 - Pushed current baseline commit `c46310d` to GitHub branch `codex/full-stack-ue-rtk-gui`.
 - Created remote refactor branch `codex/hardware-adapter-refactor` and cloned it locally at `_forks/campusCar-hardware-reuse` for hardware reuse work.
 - Started hardware profile refactor: moved chassis/camera-specific settings into `config/profiles/campus_car.env`, added `config/profiles/template.env`, kept local secrets in ignored `*.local.env`, and added `--profile` support to startup/check/stop/deploy/control scripts.
+
+## 2026-04-28
+
+- User clarified that the adaptive refactor target is two additional cars with different chassis and cameras.
+- User clarified that the new chassis path is direct NUC-to-chassis, not NUC-to-Orange-Pi-to-chassis, and that the direct chassis is STM32-based UART control.
+- Inspected seller package `_forks/hoverboard-driver-humble.zip`: it is a ROS2 Humble `hoverboard_driver` package using `ros2_control`, `diff_drive_controller`, and a UART hoverboard protocol (`0xABCD` command frame with steer/speed/checksum). It does not contain camera support or STM32 firmware.
+- User clarified that `_forks/campusCar-hardware-reuse` is the package that should eventually be installed/flashed onto other robot cars for hardware reuse/migration.
+- User selected Hikrobot/Hikvision industrial camera `MV-CS016-10GC`; vendor/customer service provided no ROS materials.
+- Researched camera route: `MV-CS016-10GC` is a color GigE Vision/GenICam camera. For ROS2 Humble, prefer `camera_aravis2` first; use Hikrobot MVS SDK wrapper only if Aravis fails.
+- Added staged Hikrobot GigE camera support on the hardware refactor branch: `config/profiles/hikrobot_gige.env`, `scripts/hikrobot_camera_start.sh`, `scripts/hikrobot_camera_probe.sh`, common `HIKROBOT_*` env vars, Aravis dependency checks, and docs.
+- Installed local Hikrobot/Aravis runtime packages (`ros-humble-camera-aravis2`, `ros-humble-camera-aravis2-msgs`, `aravis-tools`, `aravis-tools-cli`, `libaravis-0.8-0`). Probe script passes dependency checks and reports no camera connected.

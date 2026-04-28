@@ -151,9 +151,12 @@ APT_PACKAGES=(
     sshpass
     usbutils
     v4l-utils
+    aravis-tools
+    aravis-tools-cli
     "ros-${ROS_DISTRO}-ament-lint-auto"
     "ros-${ROS_DISTRO}-ament-lint-common"
     "ros-${ROS_DISTRO}-backward-ros"
+    "ros-${ROS_DISTRO}-camera-aravis2"
     "ros-${ROS_DISTRO}-camera-calibration-parsers"
     "ros-${ROS_DISTRO}-camera-info-manager"
     "ros-${ROS_DISTRO}-compressed-image-transport"
@@ -190,7 +193,7 @@ install_apt_packages() {
     if [[ "$SKIP_APT" -ne 0 ]]; then
         return 0
     fi
-    log "Installing apt packages for ROS, rosbridge, Orbbec, Python, and runtime tools"
+    log "Installing apt packages for ROS, rosbridge, Orbbec/Hikrobot cameras, Python, and runtime tools"
     sudo apt-get update
     sudo apt-get install -y "${APT_PACKAGES[@]}"
 }
@@ -385,6 +388,13 @@ verify_install() {
         ros2 pkg prefix orbbec_camera >/dev/null 2>&1 \
             && log "orbbec_camera is available" \
             || warn "orbbec_camera is not available in the current ROS environment"
+    elif [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "hikrobot_aravis" ]]; then
+        ros2 pkg prefix camera_aravis2 >/dev/null 2>&1 \
+            && log "camera_aravis2 is available" \
+            || warn "camera_aravis2 is not available in the current ROS environment"
+        command -v arv-tool-0.8 >/dev/null 2>&1 \
+            && log "arv-tool-0.8 is available: $(command -v arv-tool-0.8)" \
+            || warn "arv-tool-0.8 is not available; install aravis-tools-cli"
     else
         log "Camera dependency mode is ${CAMERA_DEPENDENCY_MODE:-none}; skipping Orbbec verification"
     fi
@@ -415,6 +425,8 @@ run_rosdep
 if [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "orbbec" ]]; then
     install_orbbec_udev
     build_orbbec_workspace
+elif [[ "${CAMERA_DEPENDENCY_MODE:-none}" == "hikrobot_aravis" ]]; then
+    log "Hikrobot/Aravis camera uses apt packages; no source workspace build needed"
 else
     log "Add custom camera dependency setup outside this script or set CAMERA_DEPENDENCY_MODE=orbbec"
 fi

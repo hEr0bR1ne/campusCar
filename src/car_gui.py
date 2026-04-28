@@ -25,6 +25,7 @@ from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import NavSatFix, Image, CompressedImage
 from std_msgs.msg import String
+from motion_profile import shape_twist_for_base
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
 import tkinter as tk
@@ -382,6 +383,7 @@ class CarNode(Node):
 
     # ── 控制 ──────────────────────────────────────────────────────────────────
     def send_cmd(self, linear: float, angular: float):
+        linear, angular = shape_twist_for_base(linear, angular)
         msg = Twist()
         msg.linear.x = linear
         msg.angular.z = angular
