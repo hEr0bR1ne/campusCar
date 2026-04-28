@@ -22,6 +22,15 @@
 
 ## Current Open Focus
 
+- Field-test restart checkpoint for 2026-04-28:
+  - New chassis work is intentionally isolated in `/home/hkust-gz-nuc/campusCar-new-chassis` on branch `hardware/new-stm32-hikrobot`.
+  - This branch was pushed to `origin/hardware/new-stm32-hikrobot`; use `git pull --ff-only` after reboot if needed.
+  - Desktop entries for the new chassis are `/home/hkust-gz-nuc/桌面/新底盘_全栈.desktop` and `/home/hkust-gz-nuc/桌面/新底盘_控制台.desktop`; both call `scripts/desktop_run_stm32.sh`.
+  - If working from terminal after reboot: `cd ~/campusCar-new-chassis && ./scripts/stm32_hoverboard_probe.sh` first, then `./scripts/hikrobot_camera_probe.sh`, then `./scripts/desktop_run_stm32.sh fullstack` when hardware checks pass.
+  - Docker is installed and `campuscar:humble` exists locally. If the login session still lacks direct Docker group permissions, the desktop wrapper should fall back to `sg docker`; a logout/login also refreshes the group membership.
+  - Current known serial state: front CH340 link is mapped through ignored `config/profiles/stm32_hoverboard_4wd.local.env` to `/dev/serial/by-path/pci-0000:00:14.0-usb-0:3.2:1.0-port0`; rear `/dev/ttyUSB1` still needs the second USB-TTL/driver link to be connected or identified.
+  - Safety default remains `HOVERBOARD_COMMAND_LIMIT_RPM=50`. Do not raise this during first outside tests until serial direction, sign convention, and stopping behavior are confirmed.
+
 - Active branch for the new STM32/Hikrobot chassis work is `hardware/new-stm32-hikrobot` in the independent `~/campusCar-new-chassis` workspace.
 - This workspace was moved out of `~/campusCar/_forks` on 2026-04-28 so new-chassis work and seller materials no longer live under the old chassis project directory.
 - `origin/main` has been merged into this branch on 2026-04-28; conflict resolution kept the profile-based hardware adapter design and absorbed the useful main-branch checkpoint/context.
