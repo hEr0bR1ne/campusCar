@@ -33,7 +33,8 @@
 
 - Current operational workspace for the old Orange Pi/Orbbec chassis is `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`; repo desktop launchers and checked docs point here for the old chassis. Do not use the STM32 `stm32_hoverboard_4wd` profile for this car.
 - The old-chassis GUI has IMU/odom integration and a compact right-side UE panel: the left nine-button D-pad is intentionally not rendered, and the `UE 最近发送` raw-message box has a vertical scrollbar so long UE JSON messages remain readable.
-- On 2026-04-28 during field testing, the vehicle was physically pointing roughly west while `/imu` raw ENU yaw read about `123.1°`. `config/robot.env` now sets `VEHICLE_HEADING_OFFSET_DEG=56.9`, so GUI and `/R2UTopic_Pos.vehicle` yaw calibrate that posture to about `180.0° ENU` (west). This is a rough field offset, not a full magnetometer calibration.
+- On 2026-04-28 during field testing, the vehicle was physically pointing roughly west while `/imu` raw ENU yaw read about `123.1°`. `config/robot.env` initially sets `VEHICLE_HEADING_OFFSET_DEG=56.9`, so GUI and `/R2UTopic_Pos.vehicle` yaw calibrate that posture to about `180.0° ENU` (west). This is a rough field offset, not a full magnetometer calibration.
+- `src/car_gui.py` now has a bottom-state `设为正北` button. Put the car's nose toward true north, click the button, and it computes `VEHICLE_HEADING_OFFSET_DEG = 90° - raw_yaw`, writes it back to `config/robot.env`, and updates the GUI immediately. `src/rtk_tools/core/bridge.py` watches the same config file so `/R2UTopic_Pos.vehicle` can pick up the new heading offset while running.
 
 - Current 4WD movement-control baseline:
   - Pure `a/d`, left/right arrow, GUI button `A/D`, and UE `TurnLeft`/`TurnRight` now pass through `src/motion_profile.py`.

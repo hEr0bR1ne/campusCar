@@ -18,6 +18,8 @@ from urllib.request import Request, urlopen
 from pathlib import Path
 from datetime import datetime
 
+CONFIG_FILE = Path(__file__).resolve().parents[1] / "config" / "robot.env"
+
 # ── ROS2 ──────────────────────────────────────────────────────────────────────
 import rclpy
 from rclpy.node import Node
@@ -39,7 +41,7 @@ from PIL import Image as PILImage, ImageTk
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 
 def load_project_env():
-    env_file = Path(__file__).resolve().parents[1] / "config" / "robot.env"
+    env_file = CONFIG_FILE
     if not env_file.exists():
         return
 
@@ -123,6 +125,7 @@ MJPEG_RECONNECT_SEC = env_float("MJPEG_RECONNECT_SEC", 0.5)
 MJPEG_BUFFER_LIMIT = 2 * 1024 * 1024
 CAMERA_WAIT_LABEL = "MJPEG/ROS 图像" if CAMERA_GUI_SOURCE in ("auto", "mjpeg", "http") else IMAGE_TOPIC
 VEHICLE_HEADING_OFFSET_DEG = env_float("VEHICLE_HEADING_OFFSET_DEG", 0.0)
+NORTH_YAW_ENU_DEG = 90.0
 
 LINEAR_SPEED    = 0.3   # m/s
 ANGULAR_SPEED   = 0.5   # rad/s
@@ -174,8 +177,51 @@ def quaternion_to_yaw(q) -> float:
     return math.atan2(siny, cosy)
 
 
+def normalize_degrees(value: float) -> float:
+    return value % 360.0
+
+
+def normalize_offset_degrees(value: float) -> float:
+    return ((value + 180.0) % 360.0) - 180.0
+
+
+def raw_yaw_deg_from_quaternion(q) -> float:
+    return normalize_degrees(math.degrees(quaternion_to_yaw(q)))
+
+
+def calibrated_yaw_deg(raw_yaw_deg: float) -> float:
+    return normalize_degrees(raw_yaw_deg + VEHICLE_HEADING_OFFSET_DEG)
+
+
 def yaw_deg_from_quaternion(q) -> float:
-    return (math.degrees(quaternion_to_yaw(q)) + VEHICLE_HEADING_OFFSET_DEG) % 360.0
+    return calibrated_yaw_deg(raw_yaw_deg_from_quaternion(q))
+
+
+def set_vehicle_heading_offset(value: float):
+    global VEHICLE_HEADING_OFFSET_DEG
+    VEHICLE_HEADING_OFFSET_DEG = normalize_offset_degrees(value)
+    os.environ["VEHICLE_HEADING_OFFSET_DEG"] = f"{VEHICLE_HEADING_OFFSET_DEG:.3f}"
+
+
+def persist_vehicle_heading_offset(value: float):
+    value = normalize_offset_degrees(value)
+    new_line = f"VEHICLE_HEADING_OFFSET_DEG={value:.3f}"
+
+    text = CONFIG_FILE.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    replaced = False
+    for idx, line in enumerate(lines):
+        if line.lstrip().startswith("VEHICLE_HEADING_OFFSET_DEG="):
+            lines[idx] = new_line + ("\n" if line.endswith("\n") else "")
+            replaced = True
+            break
+
+    if not replaced:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines.append(new_line + "\n")
+
+    CONFIG_FILE.write_text("".join(lines), encoding="utf-8")
 
 
 def finite_or_none(value):
@@ -268,13 +314,16 @@ class CarNode(Node):
     def _on_imu(self, msg: Imu):
         now = time.time()
         q = msg.orientation
+        raw_yaw = raw_yaw_deg_from_quaternion(q)
         av = msg.angular_velocity
         la = msg.linear_acceleration
         with self._lock:
             self.imu_state = {
                 "time": now,
                 "frame_id": msg.header.frame_id,
-                "yaw_deg": yaw_deg_from_quaternion(q),
+                "raw_yaw_deg": raw_yaw,
+                "yaw_deg": calibrated_yaw_deg(raw_yaw),
+                "heading_offset_deg": VEHICLE_HEADING_OFFSET_DEG,
                 "angular_velocity": {
                     "x": finite_or_none(av.x),
                     "y": finite_or_none(av.y),
@@ -290,6 +339,7 @@ class CarNode(Node):
     def _on_odom(self, msg: Odometry):
         now = time.time()
         q = msg.pose.pose.orientation
+        raw_yaw = raw_yaw_deg_from_quaternion(q)
         lin = msg.twist.twist.linear
         ang = msg.twist.twist.angular
         vx = finite_or_none(lin.x)
@@ -303,7 +353,9 @@ class CarNode(Node):
                 "time": now,
                 "frame_id": msg.header.frame_id,
                 "child_frame_id": msg.child_frame_id,
-                "yaw_deg": yaw_deg_from_quaternion(q),
+                "raw_yaw_deg": raw_yaw,
+                "yaw_deg": calibrated_yaw_deg(raw_yaw),
+                "heading_offset_deg": VEHICLE_HEADING_OFFSET_DEG,
                 "speed_mps": speed,
                 "linear_velocity": {"x": vx, "y": vy, "z": vz},
                 "angular_velocity": {
@@ -681,6 +733,14 @@ class CarGUI:
         self.lbl_vehicle_accel = self._kv(vehicle_values, "加速度", label_width=8)
         self.lbl_vehicle_imu_time = self._kv(vehicle_values, "IMU", label_width=8)
         self.lbl_vehicle_odom_time = self._kv(vehicle_values, "里程计", label_width=8)
+        self.lbl_vehicle_offset = self._kv(vehicle_values, "校准", label_width=8)
+        self.btn_heading_north = tk.Button(
+            vehicle_values, text="设为正北", font=FONT_SMALL,
+            bg=ACCENT, fg=BG, activebackground="#a6c8ff",
+            relief=tk.FLAT, cursor="hand2",
+            command=self._calibrate_heading_to_north,
+        )
+        self.btn_heading_north.pack(fill=tk.X, pady=(3, 0))
         self._draw_heading(None)
 
         # ── 坐标信息面板 ──────────────────────────────────────────────────────
@@ -1036,6 +1096,37 @@ class CarGUI:
             return "--"
         return f"{value:+.{digits}f}{suffix}"
 
+    def _latest_raw_heading(self):
+        state = self.node.get_vehicle_state()
+        now = time.time()
+        for source_key, source_name in (("imu", "IMU"), ("odom", "odom")):
+            sample = state.get(source_key)
+            if sample is None or now - sample.get("time", 0.0) > 3.0:
+                continue
+            raw_yaw = sample.get("raw_yaw_deg")
+            if raw_yaw is not None:
+                return raw_yaw, source_name
+        return None, None
+
+    def _calibrate_heading_to_north(self):
+        raw_yaw, source = self._latest_raw_heading()
+        if raw_yaw is None:
+            messagebox.showwarning("无法校准", "等待 /imu 或 /odom 后再试。")
+            return
+
+        new_offset = normalize_offset_degrees(NORTH_YAW_ENU_DEG - raw_yaw)
+        try:
+            persist_vehicle_heading_offset(new_offset)
+        except OSError as exc:
+            messagebox.showerror("写入失败", f"无法写入 config/robot.env：{exc}")
+            return
+
+        set_vehicle_heading_offset(new_offset)
+        self.lbl_status.config(
+            text=f"已将当前 {source} 朝向设为正北，偏移 {new_offset:+.1f}°"
+        )
+        self.lbl_vehicle_offset.config(text=f"{new_offset:+.1f}°", fg=GREEN)
+
     def _draw_heading(self, yaw_deg):
         canvas = self.heading_canvas
         canvas.delete("all")
@@ -1082,6 +1173,10 @@ class CarGUI:
                 text=f"{heading:.1f}° ENU{offset_note} ({heading_source})",
                 fg=GREEN if heading_source == "IMU" else YELLOW,
             )
+        self.lbl_vehicle_offset.config(
+            text=f"{VEHICLE_HEADING_OFFSET_DEG:+.1f}°",
+            fg=YELLOW if abs(VEHICLE_HEADING_OFFSET_DEG) > 0.001 else SUBTEXT,
+        )
 
         if odom is None or odom.get("speed_mps") is None:
             self.lbl_vehicle_speed.config(text="等待 /odom", fg=SUBTEXT)

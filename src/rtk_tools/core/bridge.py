@@ -16,7 +16,8 @@ from sensor_msgs.msg import NavSatFix, Image, Imu
 from config import (TOPIC_FIX_IN, TOPIC_POS_OUT, TOPIC_CMD_IN,
                     TOPIC_IMAGE_OUT, TOPIC_TEXT_OUT,
                     UE_PUBLISH_RATE, UE_INTERPOLATION_ENABLED,
-                    RTK_RX_LOG_RATE, VEHICLE_HEADING_OFFSET_DEG)
+                    RTK_RX_LOG_RATE, VEHICLE_HEADING_OFFSET_DEG,
+                    ROOT_DIR)
 from core.gnss import GNSSValidator
 from core.connection import ConnectionMonitor
 
@@ -45,8 +46,39 @@ def quaternion_to_yaw_rad(q) -> float:
     return math.atan2(siny, cosy)
 
 
+_HEADING_OFFSET_PATH = ROOT_DIR / "config" / "robot.env"
+_heading_offset_mtime = None
+_heading_offset_value = float(VEHICLE_HEADING_OFFSET_DEG)
+
+
+def _parse_heading_offset_file() -> Optional[float]:
+    try:
+        for line in _HEADING_OFFSET_PATH.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("VEHICLE_HEADING_OFFSET_DEG="):
+                return float(stripped.split("=", 1)[1].strip().strip("\"'"))
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def vehicle_heading_offset_deg() -> float:
+    global _heading_offset_mtime, _heading_offset_value
+    try:
+        mtime = _HEADING_OFFSET_PATH.stat().st_mtime
+    except OSError:
+        return _heading_offset_value
+
+    if mtime != _heading_offset_mtime:
+        parsed = _parse_heading_offset_file()
+        if parsed is not None:
+            _heading_offset_value = parsed
+        _heading_offset_mtime = mtime
+    return _heading_offset_value
+
+
 def apply_heading_offset_rad(yaw_rad: float) -> float:
-    adjusted = yaw_rad + math.radians(VEHICLE_HEADING_OFFSET_DEG)
+    adjusted = yaw_rad + math.radians(vehicle_heading_offset_deg())
     return math.atan2(math.sin(adjusted), math.cos(adjusted))
 
 
@@ -199,7 +231,7 @@ class RTKUEBridge(Node):
             "heading_source": heading_source,
             "yaw_rad": finite_float(yaw_rad),
             "yaw_deg": finite_float(yaw_deg),
-            "heading_offset_deg": finite_float(VEHICLE_HEADING_OFFSET_DEG),
+            "heading_offset_deg": finite_float(vehicle_heading_offset_deg()),
             "speed_mps": finite_float(odom["speed_mps"]) if odom is not None else None,
             "linear_velocity": odom["linear_velocity"] if odom is not None else None,
             "angular_velocity": angular_velocity,
