@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=campusCar - 状态检查
-Comment=检查所有服务运行状态
-Exec=gnome-terminal -- bash -lc "bash '$HOME/campusCar/scripts/check_all.sh'; echo; read -p 'Press Enter to close...'"
+Name=campusCar - 旧底盘状态检查
+Comment=检查旧底盘全栈服务运行状态
+Exec=gnome-terminal -- bash -lc "cd /home/hkust-gz-nuc/campusCar-old-chassis && ./scripts/check_all.sh; echo; read -p 'Press Enter to close...'"
 Icon=system-search
 Terminal=false
 Categories=Utility;

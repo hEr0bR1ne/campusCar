@@ -555,8 +555,12 @@ nohup env \
     PYTHONUNBUFFERED=1 \
     UE_PUBLISH_RATE="${UE_PUBLISH_RATE:-1.0}" \
     RTK_RX_LOG_RATE="${RTK_RX_LOG_RATE:-0}" \
+    IMU_TOPIC="${IMU_TOPIC:-/imu}" \
+    ODOM_TOPIC="${ODOM_TOPIC:-/odom}" \
     python3 "$SRC_DIR/rtk_tools/u2r_r2u_bridge.py" \
     --fix-in "${FIX_TOPIC}" \
+    --imu-in "${IMU_TOPIC:-/imu}" \
+    --odom-in "${ODOM_TOPIC:-/odom}" \
     --pos-out "${RTK_POS_TOPIC}" \
     --cmd-in "${UE_COMMAND_TOPIC}" \
     --text-out "${RTK_TEXT_TOPIC}" \

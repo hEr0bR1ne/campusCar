@@ -30,15 +30,12 @@ TOPIC_IMAGE_OUT = "/R2UTopic_Image"
 TOPIC_IMAGE_IN = ""  # Optional: source image topic
 TOPIC_CMD_IN = "/U2RTopic_Command"
 TOPIC_FIX_IN = "/fix"
+TOPIC_IMU_IN = os.environ.get("IMU_TOPIC", "/imu")
+TOPIC_ODOM_IN = os.environ.get("ODOM_TOPIC", "/odom")
 
 DEFAULT_BAUD = 115200
 DEFAULT_BRIDGE_PORT = 9090
 DEFAULT_IMAGE_IN = ""
-
-# 小车连接信息（与 robot.env 保持一致）
-CAR_IP   = "192.168.100.2"
-CAR_USER = "bingda"
-CAR_PASS = "bingda"
 
 # UE5 位置发送配置
 UE_PUBLISH_RATE = _env_float("UE_PUBLISH_RATE", 1.0)  # Hz - UE5 固定 1 秒一次接收位置

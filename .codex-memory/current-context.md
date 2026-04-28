@@ -22,6 +22,9 @@
 
 ## Current Open Focus
 
+- Current operational workspace for the old Orange Pi/Orbbec chassis is `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`; repo desktop launchers and checked docs point here for the old chassis. Do not use the STM32 `stm32_hoverboard_4wd` profile for this car.
+- The old-chassis GUI has IMU/odom integration and a compact right-side UE panel: the left nine-button D-pad is intentionally not rendered, and the `UE 最近发送` raw-message box has a vertical scrollbar so long UE JSON messages remain readable.
+
 - Current 4WD movement-control baseline:
   - Pure `a/d`, left/right arrow, GUI button `A/D`, and UE `TurnLeft`/`TurnRight` now pass through `src/motion_profile.py`.
   - After the user reported the X/Z opposite profile caused a very large turning radius, the default was changed back to zero-linear pure angular mode: `(0.0, 0.5)` stays `(0.0, 0.5)`, while combined movement such as `w+a`/`w+d` is still left unchanged as travelling-turn control.
@@ -53,7 +56,7 @@
   - The successful end-to-end smoke test used a safe `Stop` command and produced `方向指令：Stop  停车` in `data/logs/ue_bridge.log`.
   - Camera startup was optimized to reuse an already publishing Orbbec camera by default and the GUI now prefers local MJPEG frames for faster display.
   - Known hardware note: current Orbbec connection showed `USB2.1` / 480M and cold camera initialization around 40 seconds; USB3 cabling/port is still the likely hardware fix.
-  - Next recommended step after reboot: run `cd ~/campusCar && ./scripts/launch_all.sh`, ask UE to resend the standard coordinate command, then watch `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, and `data/logs/ue_bridge.log`.
+  - Next recommended step after reboot: run `cd ~/campusCar-old-chassis && ./scripts/launch_all.sh`, ask UE to resend the standard coordinate command, then watch `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, and `data/logs/ue_bridge.log`.
   - If UE still reaches the bridge but movement does not start, inspect RTK `/fix` and `/heading` readiness rather than JSON transport first.
 
 ## Update Trigger

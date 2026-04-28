@@ -8,8 +8,10 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from nav_msgs.msg import Odometry
 from std_msgs.msg import String
-from sensor_msgs.msg import NavSatFix, Image
+from sensor_msgs.msg import NavSatFix, Image, Imu
 
 from config import (TOPIC_FIX_IN, TOPIC_POS_OUT, TOPIC_CMD_IN,
                     TOPIC_IMAGE_OUT, TOPIC_TEXT_OUT,
@@ -29,10 +31,25 @@ STATUS_MAP = {
 }
 
 
+def finite_float(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def quaternion_to_yaw_rad(q) -> float:
+    siny = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    return math.atan2(siny, cosy)
+
+
 class RTKUEBridge(Node):
     """Main RTK to UE bridge - forwards GNSS data and receives commands"""
 
-    def __init__(self, fix_in: str, pos_out: str, cmd_in: str, text_out: str,
+    def __init__(self, fix_in: str, imu_in: str, odom_in: str,
+                 pos_out: str, cmd_in: str, text_out: str,
                  logfile: Optional[str], image_in: Optional[str], image_out: str):
         super().__init__("rtk_ue_bridge")
 
@@ -40,6 +57,8 @@ class RTKUEBridge(Node):
         self.pos_out = pos_out
         self.last_fix = None
         self.prev_fix = None
+        self.last_imu_state = None
+        self.last_odom_state = None
         self.fix_count = 0
         self.tx_count = 0
         self.conn_monitor = ConnectionMonitor()
@@ -57,6 +76,8 @@ class RTKUEBridge(Node):
         self.pub_text = self.create_publisher(String, text_out, 10)
 
         self.sub_fix = self.create_subscription(NavSatFix, fix_in, self._on_fix, 10)
+        self.sub_imu = self.create_subscription(Imu, imu_in, self._on_imu, qos_profile_sensor_data)
+        self.sub_odom = self.create_subscription(Odometry, odom_in, self._on_odom, qos_profile_sensor_data)
         self.sub_cmd = self.create_subscription(String, cmd_in, self._on_cmd, 10)
 
         self.pub_img = None
@@ -69,6 +90,7 @@ class RTKUEBridge(Node):
         self.position_timer = self.create_timer(publish_interval, self._publish_interpolated_position)
 
         self.get_logger().info(f"Forward NavSatFix: {fix_in} -> {pos_out} (as JSON String)")
+        self.get_logger().info(f"Attach vehicle state: IMU {imu_in}, odom {odom_in}")
         self.get_logger().info(f"Publish text: {text_out}")
         self.get_logger().info(f"Listen commands: {cmd_in}")
         if image_in:
@@ -107,6 +129,13 @@ class RTKUEBridge(Node):
             return None
         return fix_msg.header.stamp.sec + fix_msg.header.stamp.nanosec / 1e9
 
+    def _header_timestamp(self, msg):
+        if msg is None:
+            return None
+        stamp = msg.header.stamp
+        value = stamp.sec + stamp.nanosec / 1e9
+        return value if value > 0 else None
+
     def _make_payload(self, *, status_code: int, status_name: str, lat, lon, alt,
                       frame_id: str, timestamp: float):
         return {
@@ -117,6 +146,7 @@ class RTKUEBridge(Node):
             "altitude": float(alt) if alt is not None and math.isfinite(alt) else None,
             "timestamp": timestamp,
             "frame_id": frame_id,
+            "vehicle": self._make_vehicle_payload(),
         }
 
     def _format_coordinate(self, value):
@@ -133,7 +163,49 @@ class RTKUEBridge(Node):
             f"\"altitude\": {json.dumps(payload['altitude'], allow_nan=False)}",
             f"\"timestamp\": {json.dumps(payload['timestamp'], allow_nan=False)}",
             f"\"frame_id\": {json.dumps(payload['frame_id'])}",
+            f"\"vehicle\": {json.dumps(payload.get('vehicle'), ensure_ascii=False, allow_nan=False)}",
         ]) + "}"
+
+    def _make_vehicle_payload(self):
+        now = time.time()
+        imu = self.last_imu_state
+        odom = self.last_odom_state
+
+        heading_source = None
+        yaw_rad = yaw_deg = None
+        if imu is not None and now - imu["received_at"] <= 3.0:
+            heading_source = "imu"
+            yaw_rad = imu["yaw_rad"]
+            yaw_deg = imu["yaw_deg"]
+        elif odom is not None and now - odom["received_at"] <= 3.0:
+            heading_source = "odom"
+            yaw_rad = odom["yaw_rad"]
+            yaw_deg = odom["yaw_deg"]
+
+        angular_velocity = None
+        linear_acceleration = None
+        if imu is not None:
+            angular_velocity = imu["angular_velocity"]
+            linear_acceleration = imu["linear_acceleration"]
+        elif odom is not None:
+            angular_velocity = odom["angular_velocity"]
+
+        return {
+            "heading_source": heading_source,
+            "yaw_rad": finite_float(yaw_rad),
+            "yaw_deg": finite_float(yaw_deg),
+            "speed_mps": finite_float(odom["speed_mps"]) if odom is not None else None,
+            "linear_velocity": odom["linear_velocity"] if odom is not None else None,
+            "angular_velocity": angular_velocity,
+            "linear_acceleration": linear_acceleration,
+            "imu_age_sec": finite_float(now - imu["received_at"]) if imu is not None else None,
+            "odom_age_sec": finite_float(now - odom["received_at"]) if odom is not None else None,
+            "imu_frame_id": imu["frame_id"] if imu is not None else None,
+            "odom_frame_id": odom["frame_id"] if odom is not None else None,
+            "odom_child_frame_id": odom["child_frame_id"] if odom is not None else None,
+            "imu_timestamp": imu["timestamp"] if imu is not None else None,
+            "odom_timestamp": odom["timestamp"] if odom is not None else None,
+        }
 
     def _publish_payload(self, payload, fix_age_sec=None):
         self.tx_count += 1
@@ -151,9 +223,16 @@ class RTKUEBridge(Node):
             alt_text = f", Alt: {alt:.1f}m" if alt is not None else ""
             pos_text = f"Lat: {lat:.8f}, Lon: {lon:.8f}{alt_text}"
         age_text = "no-fix" if fix_age_sec is None else f"age={fix_age_sec:.2f}s"
+        vehicle = payload.get("vehicle") or {}
+        vehicle_text = ""
+        if vehicle.get("yaw_deg") is not None or vehicle.get("speed_mps") is not None:
+            yaw_text = "--" if vehicle.get("yaw_deg") is None else f"{vehicle['yaw_deg']:.1f}deg"
+            speed_text = "--" if vehicle.get("speed_mps") is None else f"{vehicle['speed_mps']:.2f}m/s"
+            source_text = vehicle.get("heading_source") or "none"
+            vehicle_text = f" yaw={yaw_text}({source_text}) speed={speed_text}"
         print(
             f"[R2U TX] seq={self.tx_count} {payload['status_name']} "
-            f"{pos_text} {age_text} topic={self.pos_out}",
+            f"{pos_text}{vehicle_text} {age_text} topic={self.pos_out}",
             flush=True,
         )
 
@@ -188,6 +267,52 @@ class RTKUEBridge(Node):
         self.fix_count += 1
 
         self._log_raw_fix(msg, self._status_name(msg.status.status))
+
+    def _on_imu(self, msg: Imu):
+        yaw_rad = quaternion_to_yaw_rad(msg.orientation)
+        self.last_imu_state = {
+            "received_at": time.time(),
+            "timestamp": self._header_timestamp(msg),
+            "frame_id": msg.header.frame_id,
+            "yaw_rad": finite_float(yaw_rad),
+            "yaw_deg": finite_float(math.degrees(yaw_rad) % 360.0),
+            "angular_velocity": {
+                "x": finite_float(msg.angular_velocity.x),
+                "y": finite_float(msg.angular_velocity.y),
+                "z": finite_float(msg.angular_velocity.z),
+            },
+            "linear_acceleration": {
+                "x": finite_float(msg.linear_acceleration.x),
+                "y": finite_float(msg.linear_acceleration.y),
+                "z": finite_float(msg.linear_acceleration.z),
+            },
+        }
+
+    def _on_odom(self, msg: Odometry):
+        yaw_rad = quaternion_to_yaw_rad(msg.pose.pose.orientation)
+        vx = finite_float(msg.twist.twist.linear.x)
+        vy = finite_float(msg.twist.twist.linear.y)
+        vz = finite_float(msg.twist.twist.linear.z)
+        speed = math.hypot(vx, vy) if vx is not None and vy is not None else None
+        self.last_odom_state = {
+            "received_at": time.time(),
+            "timestamp": self._header_timestamp(msg),
+            "frame_id": msg.header.frame_id,
+            "child_frame_id": msg.child_frame_id,
+            "yaw_rad": finite_float(yaw_rad),
+            "yaw_deg": finite_float(math.degrees(yaw_rad) % 360.0),
+            "speed_mps": finite_float(speed),
+            "linear_velocity": {
+                "x": vx,
+                "y": vy,
+                "z": vz,
+            },
+            "angular_velocity": {
+                "x": finite_float(msg.twist.twist.angular.x),
+                "y": finite_float(msg.twist.twist.angular.y),
+                "z": finite_float(msg.twist.twist.angular.z),
+            },
+        }
 
     def _publish_interpolated_position(self):
         now = time.time()
