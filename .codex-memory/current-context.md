@@ -22,6 +22,15 @@
 
 ## Current Open Focus
 
+- Field-test restart checkpoint for 2026-04-28:
+  - Old chassis work is intentionally isolated in `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`.
+  - This branch was pushed to `origin/hardware/old-orange-pi-orbbec`; use `git pull --ff-only` after reboot if needed.
+  - Desktop entries for the old chassis are `/home/hkust-gz-nuc/桌面/campusCar_Start.desktop` and `/home/hkust-gz-nuc/桌面/campusCar_Control.desktop`; both point to `/home/hkust-gz-nuc/campusCar-old-chassis`.
+  - If working from terminal after reboot: `cd ~/campusCar-old-chassis && ./scripts/launch_all.sh`.
+  - Quick health check: `cd ~/campusCar-old-chassis && ./scripts/check_all.sh`.
+  - Useful logs during field testing: `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, `data/logs/ue_bridge.log`, `data/logs/camera.log`, and `data/logs/mediamtx.log`.
+  - This is the Orange Pi / Orbbec old-bottom-board car. Do not switch it to `stm32_hoverboard_4wd`; that profile belongs to `/home/hkust-gz-nuc/campusCar-new-chassis`.
+
 - Current operational workspace for the old Orange Pi/Orbbec chassis is `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`; repo desktop launchers and checked docs point here for the old chassis. Do not use the STM32 `stm32_hoverboard_4wd` profile for this car.
 - The old-chassis GUI has IMU/odom integration and a compact right-side UE panel: the left nine-button D-pad is intentionally not rendered, and the `UE 最近发送` raw-message box has a vertical scrollbar so long UE JSON messages remain readable.
 

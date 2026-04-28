@@ -63,3 +63,4 @@
 - Integrated the IMU/odom vehicle-state GUI and `/R2UTopic_Pos.vehicle` payload into the old-chassis worktree; live checks confirmed `/imu`, `/odom`, and `/R2UTopic_Pos` vehicle fields are present.
 - Compactified the old-chassis GUI so `UE 最近发送` is readable: removed the rendered left nine-button D-pad, reduced right-side card spacing, reduced the vehicle heading canvas size, and added a scrollbar to the raw UE message text box.
 - Renamed the old-chassis branch to `hardware/old-orange-pi-orbbec`; repo desktop launchers and checked startup/debug docs now use `/home/hkust-gz-nuc/campusCar-old-chassis` instead of the legacy `~/campusCar` path.
+- Before the user's outside field test, recorded a restart checkpoint in `.codex-memory/current-context.md`: old chassis terminal entry is `cd ~/campusCar-old-chassis && ./scripts/launch_all.sh`, health check is `./scripts/check_all.sh`, and the key logs remain under `data/logs/`.
