@@ -122,6 +122,7 @@ MJPEG_CONNECT_TIMEOUT_SEC = env_float("MJPEG_CONNECT_TIMEOUT_SEC", 1.5)
 MJPEG_RECONNECT_SEC = env_float("MJPEG_RECONNECT_SEC", 0.5)
 MJPEG_BUFFER_LIMIT = 2 * 1024 * 1024
 CAMERA_WAIT_LABEL = "MJPEG/ROS 图像" if CAMERA_GUI_SOURCE in ("auto", "mjpeg", "http") else IMAGE_TOPIC
+VEHICLE_HEADING_OFFSET_DEG = env_float("VEHICLE_HEADING_OFFSET_DEG", 0.0)
 
 LINEAR_SPEED    = 0.3   # m/s
 ANGULAR_SPEED   = 0.5   # rad/s
@@ -174,7 +175,7 @@ def quaternion_to_yaw(q) -> float:
 
 
 def yaw_deg_from_quaternion(q) -> float:
-    return math.degrees(quaternion_to_yaw(q)) % 360.0
+    return (math.degrees(quaternion_to_yaw(q)) + VEHICLE_HEADING_OFFSET_DEG) % 360.0
 
 
 def finite_or_none(value):
@@ -1076,8 +1077,9 @@ class CarGUI:
         if heading is None:
             self.lbl_vehicle_heading.config(text="等待 /imu 或 /odom", fg=SUBTEXT)
         else:
+            offset_note = " 校准" if abs(VEHICLE_HEADING_OFFSET_DEG) > 0.001 else ""
             self.lbl_vehicle_heading.config(
-                text=f"{heading:.1f}° ENU ({heading_source})",
+                text=f"{heading:.1f}° ENU{offset_note} ({heading_source})",
                 fg=GREEN if heading_source == "IMU" else YELLOW,
             )
 

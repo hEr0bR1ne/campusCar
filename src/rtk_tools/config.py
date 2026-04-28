@@ -41,6 +41,7 @@ DEFAULT_IMAGE_IN = ""
 UE_PUBLISH_RATE = _env_float("UE_PUBLISH_RATE", 1.0)  # Hz - UE5 固定 1 秒一次接收位置
 UE_INTERPOLATION_ENABLED = _env_bool("UE_INTERPOLATION_ENABLED", True)
 RTK_RX_LOG_RATE = _env_float("RTK_RX_LOG_RATE", 0.0)  # Hz; 0 表示不打印不均匀的原始 /fix 接收日志
+VEHICLE_HEADING_OFFSET_DEG = _env_float("VEHICLE_HEADING_OFFSET_DEG", 0.0)
 
 SERIAL_GLOBS = [
     "/dev/serial/by-id/*",

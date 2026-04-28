@@ -16,7 +16,7 @@ from sensor_msgs.msg import NavSatFix, Image, Imu
 from config import (TOPIC_FIX_IN, TOPIC_POS_OUT, TOPIC_CMD_IN,
                     TOPIC_IMAGE_OUT, TOPIC_TEXT_OUT,
                     UE_PUBLISH_RATE, UE_INTERPOLATION_ENABLED,
-                    RTK_RX_LOG_RATE)
+                    RTK_RX_LOG_RATE, VEHICLE_HEADING_OFFSET_DEG)
 from core.gnss import GNSSValidator
 from core.connection import ConnectionMonitor
 
@@ -43,6 +43,11 @@ def quaternion_to_yaw_rad(q) -> float:
     siny = 2.0 * (q.w * q.z + q.x * q.y)
     cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     return math.atan2(siny, cosy)
+
+
+def apply_heading_offset_rad(yaw_rad: float) -> float:
+    adjusted = yaw_rad + math.radians(VEHICLE_HEADING_OFFSET_DEG)
+    return math.atan2(math.sin(adjusted), math.cos(adjusted))
 
 
 class RTKUEBridge(Node):
@@ -194,6 +199,7 @@ class RTKUEBridge(Node):
             "heading_source": heading_source,
             "yaw_rad": finite_float(yaw_rad),
             "yaw_deg": finite_float(yaw_deg),
+            "heading_offset_deg": finite_float(VEHICLE_HEADING_OFFSET_DEG),
             "speed_mps": finite_float(odom["speed_mps"]) if odom is not None else None,
             "linear_velocity": odom["linear_velocity"] if odom is not None else None,
             "angular_velocity": angular_velocity,
@@ -269,7 +275,7 @@ class RTKUEBridge(Node):
         self._log_raw_fix(msg, self._status_name(msg.status.status))
 
     def _on_imu(self, msg: Imu):
-        yaw_rad = quaternion_to_yaw_rad(msg.orientation)
+        yaw_rad = apply_heading_offset_rad(quaternion_to_yaw_rad(msg.orientation))
         self.last_imu_state = {
             "received_at": time.time(),
             "timestamp": self._header_timestamp(msg),
@@ -289,7 +295,7 @@ class RTKUEBridge(Node):
         }
 
     def _on_odom(self, msg: Odometry):
-        yaw_rad = quaternion_to_yaw_rad(msg.pose.pose.orientation)
+        yaw_rad = apply_heading_offset_rad(quaternion_to_yaw_rad(msg.pose.pose.orientation))
         vx = finite_float(msg.twist.twist.linear.x)
         vy = finite_float(msg.twist.twist.linear.y)
         vz = finite_float(msg.twist.twist.linear.z)

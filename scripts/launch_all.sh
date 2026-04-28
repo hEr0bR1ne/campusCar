@@ -557,6 +557,7 @@ nohup env \
     RTK_RX_LOG_RATE="${RTK_RX_LOG_RATE:-0}" \
     IMU_TOPIC="${IMU_TOPIC:-/imu}" \
     ODOM_TOPIC="${ODOM_TOPIC:-/odom}" \
+    VEHICLE_HEADING_OFFSET_DEG="${VEHICLE_HEADING_OFFSET_DEG:-0}" \
     python3 "$SRC_DIR/rtk_tools/u2r_r2u_bridge.py" \
     --fix-in "${FIX_TOPIC}" \
     --imu-in "${IMU_TOPIC:-/imu}" \
