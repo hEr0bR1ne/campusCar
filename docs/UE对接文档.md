@@ -95,7 +95,7 @@ rtsp://192.168.100.1:8554/robot_cam
 {"commandId":"010","commandType":"move","RobotId":"Robot","RobotType":" ","commandParams":{"destination":"TurnBackward","speed":"30"}}
 ```
 
-> 方向控制现在由 NUC 端桥接节点持续补发 `/cmd_vel`，UE 发一次指令后默认最多保持 `UE_DIRECTION_TIMEOUT_SEC=0.8` 秒。按键长按/连续动作时，UE 建议按 5~10Hz 重复发送同一个指令；松开时发送任意方向配合 `speed: "0"`，或发送 `destination: "Stop"` 停车。
+> 方向控制现在由 NUC 端桥接节点持续补发 `/cmd_vel`，UE 发一次指令后默认最多保持 `UE_DIRECTION_TIMEOUT_SEC=0.8` 秒。`TurnLeft`/`TurnRight` 会发送零线速度原地转向指令；行进中转向仍由 UE 连续发送前进/后退与转向组合逻辑实现。按键长按/连续动作时，UE 建议按 5~10Hz 重复发送同一个指令；松开时发送任意方向配合 `speed: "0"`，或发送 `destination: "Stop"` 停车。
 
 ---
 

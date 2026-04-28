@@ -25,7 +25,9 @@ pkill -f "mjpeg_server.py"     2>/dev/null && echo "✅ mjpeg_server 已停止" 
 pkill -f "mediamtx"            2>/dev/null && echo "✅ mediamtx 已停止" || true
 pkill -f "ffmpeg"              2>/dev/null && echo "✅ ffmpeg 已停止" || true
 pkill -f "orbbec_camera"       2>/dev/null && echo "✅ 相机 launch 已停止" || true
+pkill -f "gemini_330_series.launch.py" 2>/dev/null && echo "✅ Orbbec launch 已停止" || true
 pkill -f "[c]omponent_container.*camera_container" 2>/dev/null && echo "✅ 相机容器已停止" || true
+pkill -f "[c]amera_driver_gv"  2>/dev/null && echo "✅ Hikrobot/Aravis 相机节点已停止" || true
 
 echo ""
 echo "[3/3] 停止控制相关进程..."

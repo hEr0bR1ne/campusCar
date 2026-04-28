@@ -133,9 +133,12 @@ APT_PACKAGES=(
     sshpass
     usbutils
     v4l-utils
+    aravis-tools
+    aravis-tools-cli
     "ros-${ROS_DISTRO}-ament-lint-auto"
     "ros-${ROS_DISTRO}-ament-lint-common"
     "ros-${ROS_DISTRO}-backward-ros"
+    "ros-${ROS_DISTRO}-camera-aravis2"
     "ros-${ROS_DISTRO}-camera-calibration-parsers"
     "ros-${ROS_DISTRO}-camera-info-manager"
     "ros-${ROS_DISTRO}-compressed-image-transport"
@@ -172,7 +175,7 @@ install_apt_packages() {
     if [[ "$SKIP_APT" -ne 0 ]]; then
         return 0
     fi
-    log "Installing apt packages for ROS, rosbridge, Orbbec, Python, and runtime tools"
+    log "Installing apt packages for ROS, rosbridge, Orbbec/Hikrobot cameras, Python, and runtime tools"
     sudo apt-get update
     sudo apt-get install -y "${APT_PACKAGES[@]}"
 }

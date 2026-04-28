@@ -24,6 +24,11 @@ UE_STATUS_INTERVAL="${UE_STATUS_INTERVAL:-1}"
 REUSE_CAMERA="${REUSE_CAMERA:-1}"
 RESET_ORBBEC_USB="${RESET_ORBBEC_USB:-0}"
 CAMERA_REUSE_PROBE_TIMEOUT="${CAMERA_REUSE_PROBE_TIMEOUT:-3}"
+CAMERA_MODE="${CAMERA_MODE:-orbbec}"
+CAMERA_MODE="${CAMERA_MODE,,}"
+CAMERA_INFO_TOPIC="${CAMERA_INFO_TOPIC:-${IMAGE_TOPIC%/*}/camera_info}"
+HIKROBOT_CAMERA_NODE="${HIKROBOT_CAMERA_NODE:-hikrobot_camera}"
+HIKROBOT_ARAVIS_PARAMS_FILE="${HIKROBOT_ARAVIS_PARAMS_FILE:-${LOGDIR}/hikrobot_aravis_params.yaml}"
 START_GUI_EARLY="${START_GUI_EARLY:-1}"
 REFRESH_ROS_DAEMON="${REFRESH_ROS_DAEMON:-0}"
 LIVE_LOG_PIDS=()
@@ -60,6 +65,29 @@ pick_ue_ip() {
     printf '%s\n' "$ip"
 }
 reset_log() { : > "$1"; }
+is_orbbec_camera_mode() {
+    case "$CAMERA_MODE" in
+        orbbec|orbbec_ros|gemini|gemini_330) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+is_hikrobot_camera_mode() {
+    case "$CAMERA_MODE" in
+        hikrobot|hikrobot_gige|hikrobot_gige_aravis|aravis|camera_aravis2) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+camera_mode_label() {
+    if is_orbbec_camera_mode; then
+        printf 'Orbbec'
+    elif is_hikrobot_camera_mode; then
+        printf 'Hikrobot GigE (camera_aravis2)'
+    elif [ "$CAMERA_MODE" = "none" ]; then
+        printf 'none'
+    else
+        printf 'unknown:%s' "$CAMERA_MODE"
+    fi
+}
 camera_frame_ready() {
     local timeout_s="${1:-8}"
     timeout "${timeout_s}s" python3 - "${IMAGE_TOPIC}" "$timeout_s" >/dev/null 2>&1 <<'PY'
@@ -91,7 +119,20 @@ os._exit(1)
 PY
 }
 camera_process_alive() {
-    pgrep -f "gemini_330_series.launch.py|[c]omponent_container.*camera_container|orbbec_camera" >/dev/null 2>&1
+    if is_orbbec_camera_mode; then
+        pgrep -f "gemini_330_series.launch.py|[c]omponent_container.*camera_container|orbbec_camera" >/dev/null 2>&1
+    elif is_hikrobot_camera_mode; then
+        pgrep -f "[c]amera_driver_gv|camera_aravis2.*camera_driver_gv" >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+stop_camera_processes() {
+    pkill -f orbbec_camera        2>/dev/null || true
+    pkill -f gemini_330_series.launch.py 2>/dev/null || true
+    pkill -f "[c]omponent_container.*camera_container" 2>/dev/null || true
+    pkill -f "[c]amera_driver_gv" 2>/dev/null || true
+    pkill -f "camera_aravis2.*camera_driver_gv" 2>/dev/null || true
 }
 mjpeg_frame_ready() {
     local timeout_s="${1:-1}"
@@ -142,6 +183,82 @@ reset_orbbec_usb() {
             || srun "$reset_cmd" 2bc5:0807 >/dev/null 2>&1 \
             || warn "Orbbec USB reset 失败，继续尝试启动相机"
         sleep 2
+    fi
+}
+write_hikrobot_aravis_params() {
+    cat > "$HIKROBOT_ARAVIS_PARAMS_FILE" <<EOF
+/**:
+  ros__parameters:
+    guid: "${HIKROBOT_CAMERA_GUID:-}"
+    frame_id: "${HIKROBOT_FRAME_ID:-hikrobot_camera}"
+    stream_names: []
+    verbose: ${HIKROBOT_VERBOSE:-false}
+EOF
+
+    if [ -n "${HIKROBOT_GEV_PACKET_SIZE:-}" ]; then
+        cat >> "$HIKROBOT_ARAVIS_PARAMS_FILE" <<EOF
+    TransportLayerControl:
+      GevSCPSPacketSize: ${HIKROBOT_GEV_PACKET_SIZE}
+EOF
+    fi
+
+    cat >> "$HIKROBOT_ARAVIS_PARAMS_FILE" <<EOF
+    ImageFormatControl:
+      PixelFormat: "${HIKROBOT_PIXEL_FORMAT:-BGR8}"
+      Width: ${HIKROBOT_WIDTH:-1440}
+      Height: ${HIKROBOT_HEIGHT:-1080}
+    AcquisitionControl:
+      ExposureMode: "Timed"
+      ExposureAuto: "${HIKROBOT_EXPOSURE_AUTO:-Continuous}"
+      AcquisitionFrameRateEnable: true
+      AcquisitionFrameRate: ${HIKROBOT_FPS:-30.0}
+    AnalogControl:
+      GainAuto: "${HIKROBOT_GAIN_AUTO:-Continuous}"
+EOF
+}
+start_hikrobot_camera() {
+    if ! ros2 pkg prefix camera_aravis2 >/dev/null 2>&1; then
+        warn "未安装 camera_aravis2；请先运行 ./scripts/deploy_dependencies.sh 或安装 ros-${ROS_DISTRO}-camera-aravis2 aravis-tools aravis-tools-cli"
+        return 0
+    fi
+
+    write_hikrobot_aravis_params
+    log "启动海康 GigE 相机（camera_aravis2，参数: ${HIKROBOT_ARAVIS_PARAMS_FILE}）..."
+    nohup setsid ros2 run camera_aravis2 camera_driver_gv \
+        --ros-args \
+        -r "__node:=${HIKROBOT_CAMERA_NODE}" \
+        -r "/${HIKROBOT_CAMERA_NODE}/image_raw:=${IMAGE_TOPIC}" \
+        -r "/${HIKROBOT_CAMERA_NODE}/camera_info:=${CAMERA_INFO_TOPIC}" \
+        --params-file "$HIKROBOT_ARAVIS_PARAMS_FILE" \
+        > "$LOGDIR/camera.log" 2>&1 &
+    CAMERA_LAUNCH_PID=$!
+    sleep 2
+    if kill -0 "$CAMERA_LAUNCH_PID" 2>/dev/null; then
+        ok "海康相机节点已拉起，输出将映射到 ${IMAGE_TOPIC}"
+    else
+        warn "海康相机节点已退出，检查 $LOGDIR/camera.log"
+    fi
+}
+start_camera_node() {
+    if is_orbbec_camera_mode; then
+        reset_orbbec_usb
+        log "启动 Orbbec 相机..."
+        nohup setsid ros2 launch orbbec_camera gemini_330_series.launch.py \
+            "${ORBBEC_LAUNCH_ARGS[@]}" \
+            > "$LOGDIR/camera.log" 2>&1 &
+        CAMERA_LAUNCH_PID=$!
+        sleep 2
+        if kill -0 "$CAMERA_LAUNCH_PID" 2>/dev/null; then
+            ok "相机启动进程已拉起，视频服务将先订阅并等待首帧"
+        else
+            warn "相机启动进程已退出，检查 $LOGDIR/camera.log"
+        fi
+    elif is_hikrobot_camera_mode; then
+        start_hikrobot_camera
+    elif [ "$CAMERA_MODE" = "none" ]; then
+        warn "CAMERA_MODE=none，跳过相机节点启动"
+    else
+        warn "未知 CAMERA_MODE=${CAMERA_MODE}，跳过相机节点启动"
     fi
 }
 stop_serial_claimers() {
@@ -221,7 +338,9 @@ trap 'stop_live_logs; exit 130' INT
 trap 'stop_live_logs; exit 143' TERM
 
 source "$ROS_SETUP"
-[ -f "$ORBBEC_SETUP" ] && source "$ORBBEC_SETUP"
+if is_orbbec_camera_mode; then
+    [ -f "$ORBBEC_SETUP" ] && source "$ORBBEC_SETUP"
+fi
 [ -f "$TS_BRIDGE_SETUP" ] && source "$TS_BRIDGE_SETUP"
 
 UE_IP="$(pick_ue_ip)"
@@ -235,6 +354,7 @@ echo "========================================"
 
 # ── 1. 杀掉旧进程 ────────────────────────────────────────────
 log "清理旧进程..."
+log "当前相机模式: $(camera_mode_label)"
 if [ "$REUSE_CAMERA" = "1" ] && camera_process_alive; then
     log "检测到已有相机进程，快速检查是否可复用..."
     if mjpeg_frame_ready 1 || camera_frame_ready "$CAMERA_REUSE_PROBE_TIMEOUT"; then
@@ -250,11 +370,9 @@ pkill -f rosbridge_tcp        2>/dev/null || true
 pkill -f rosbridge_websocket  2>/dev/null || true
 pkill -f u2r_r2u_bridge.py    2>/dev/null || true
 if [ "$CAMERA_REUSE_READY" = "1" ]; then
-    log "保留已运行的 Orbbec 相机，跳过相机重启"
+    log "保留已运行的相机，跳过相机重启"
 else
-    pkill -f orbbec_camera        2>/dev/null || true
-    pkill -f gemini_330_series.launch.py 2>/dev/null || true
-    pkill -f "[c]omponent_container.*camera_container" 2>/dev/null || true
+    stop_camera_processes
 fi
 pkill -f mjpeg_server         2>/dev/null || true
 pkill -f rtsp_server          2>/dev/null || true
@@ -309,20 +427,9 @@ fi
 
 # ── 5. 启动相机节点 ──────────────────────────────────────────
 if [ "$CAMERA_REUSE_READY" = "1" ]; then
-    ok "复用已运行相机，跳过 Orbbec 初始化"
+    ok "复用已运行相机，跳过相机初始化"
 else
-    reset_orbbec_usb
-    log "启动 Orbbec 相机..."
-    nohup setsid ros2 launch orbbec_camera gemini_330_series.launch.py \
-        "${ORBBEC_LAUNCH_ARGS[@]}" \
-        > "$LOGDIR/camera.log" 2>&1 &
-    CAMERA_LAUNCH_PID=$!
-    sleep 2
-    if kill -0 "$CAMERA_LAUNCH_PID" 2>/dev/null; then
-        ok "相机启动进程已拉起，视频服务将先订阅并等待首帧"
-    else
-        warn "相机启动进程已退出，检查 $LOGDIR/camera.log"
-    fi
+    start_camera_node
 fi
 
 # ── 6. 提前启动视频服务，让订阅端在相机出首帧前就挂好 ─────────────
