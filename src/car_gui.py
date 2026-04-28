@@ -706,7 +706,6 @@ class CarGUI:
         conn_panel = self._card(right, "UE 连接状态", fill=tk.X, pady=(0, 5))
 
         self.lbl_rosbridge = self._kv(conn_panel, "rosbridge", label_width=10)
-        self.lbl_camera_stream = self._kv(conn_panel, "相机画面", label_width=10)
         self.lbl_ue_activity = self._kv(conn_panel, "UE活跃", label_width=10)
         self.lbl_graph_time = self._kv(conn_panel, "刷新", label_width=10)
 
@@ -1238,16 +1237,6 @@ class CarGUI:
         else:
             self.lbl_rosbridge.config(text=f"● :{ROSBRIDGE_PORT} 未监听", fg=RED)
             self.lbl_ros.config(text="ROS2 / UE未连", fg=YELLOW)
-
-        if info["frame_time"] is None:
-            self.lbl_camera_stream.config(text=f"等待 {CAMERA_WAIT_LABEL}", fg=SUBTEXT)
-        else:
-            frame_age = now - info["frame_time"]
-            active_topic = info["image_topic_active"] or IMAGE_TOPIC
-            self.lbl_camera_stream.config(
-                text=f"● {active_topic}  {frame_age:.1f}s前",
-                fg=self._age_color(info["frame_time"], 1.5, 5.0),
-            )
 
         if info["command_time"] is None:
             self.lbl_ue_activity.config(text="等待 UE 发送消息", fg=SUBTEXT)
