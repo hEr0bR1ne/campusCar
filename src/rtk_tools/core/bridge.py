@@ -17,7 +17,9 @@ from config import (TOPIC_FIX_IN, TOPIC_POS_OUT, TOPIC_CMD_IN,
                     TOPIC_IMAGE_OUT, TOPIC_TEXT_OUT,
                     UE_PUBLISH_RATE, UE_INTERPOLATION_ENABLED,
                     RTK_RX_LOG_RATE, VEHICLE_HEADING_OFFSET_DEG,
-                    ROOT_DIR)
+                    RTK_POSITION_HOLD_ENABLED,
+                    RTK_POSITION_HOLD_SPEED_THRESHOLD_MPS,
+                    RTK_POSITION_HOLD_ODOM_TIMEOUT_SEC, ROOT_DIR)
 from core.gnss import GNSSValidator
 from core.connection import ConnectionMonitor
 
@@ -108,6 +110,11 @@ class RTKUEBridge(Node):
         self.last_fix_time = None
         self.prev_fix_time = None
         self._last_rx_log_time = 0.0
+        self.position_hold_enabled = bool(RTK_POSITION_HOLD_ENABLED)
+        self.position_hold_speed_threshold = max(float(RTK_POSITION_HOLD_SPEED_THRESHOLD_MPS), 0.0)
+        self.position_hold_odom_timeout = max(float(RTK_POSITION_HOLD_ODOM_TIMEOUT_SEC), 0.1)
+        self.position_cache = None
+        self.position_cache_updated_at = None
 
         self.pub_pos  = self.create_publisher(String, pos_out, 20)
         self.pub_text = self.create_publisher(String, text_out, 10)
@@ -138,6 +145,12 @@ class RTKUEBridge(Node):
             f"UE5 position publish rate: {self.publish_rate}Hz "
             f"(interpolation: {self.interpolation_enabled})"
         )
+        if self.position_hold_enabled:
+            self.get_logger().info(
+                "RTK position hold enabled: update UE coordinate cache only when "
+                f"/odom speed > {self.position_hold_speed_threshold:.3f}m/s; "
+                f"odom timeout {self.position_hold_odom_timeout:.1f}s"
+            )
         if self.rx_log_rate <= 0.0:
             self.get_logger().info("Raw /fix RX console log disabled; use RTK_RX_LOG_RATE>0 to enable")
 
@@ -245,7 +258,7 @@ class RTKUEBridge(Node):
             "odom_timestamp": odom["timestamp"] if odom is not None else None,
         }
 
-    def _publish_payload(self, payload, fix_age_sec=None):
+    def _publish_payload(self, payload, fix_age_sec=None, hold_state=None):
         self.tx_count += 1
 
         msg = String()
@@ -268,9 +281,10 @@ class RTKUEBridge(Node):
             speed_text = "--" if vehicle.get("speed_mps") is None else f"{vehicle['speed_mps']:.2f}m/s"
             source_text = vehicle.get("heading_source") or "none"
             vehicle_text = f" yaw={yaw_text}({source_text}) speed={speed_text}"
+        hold_text = f" hold={hold_state}" if hold_state else ""
         print(
             f"[R2U TX] seq={self.tx_count} {payload['status_name']} "
-            f"{pos_text}{vehicle_text} {age_text} topic={self.pos_out}",
+            f"{pos_text}{vehicle_text} {age_text}{hold_text} topic={self.pos_out}",
             flush=True,
         )
 
@@ -352,6 +366,74 @@ class RTKUEBridge(Node):
             },
         }
 
+    def _make_position_sample(self, *, status_code: int, lat, lon, alt,
+                              frame_id: str, timestamp: float, fix_time):
+        return {
+            "status_code": status_code,
+            "status_name": self._status_name(status_code),
+            "lat": lat,
+            "lon": lon,
+            "alt": alt,
+            "frame_id": frame_id,
+            "timestamp": timestamp,
+            "fix_time": fix_time,
+        }
+
+    def _current_speed_state(self, now: float):
+        odom = self.last_odom_state
+        if odom is None:
+            return None, None, "no-odom"
+        age = now - odom["received_at"]
+        if age > self.position_hold_odom_timeout:
+            return None, age, "odom-stale"
+        return odom.get("speed_mps"), age, "odom"
+
+    def _sample_is_valid(self, sample) -> bool:
+        return (
+            sample is not None
+            and GNSSValidator.is_valid(sample.get("lat"), sample.get("lon"))
+        )
+
+    def _cache_position_sample(self, sample, now: float):
+        if self._sample_is_valid(sample):
+            self.position_cache = dict(sample)
+            self.position_cache_updated_at = now
+
+    def _apply_position_hold(self, live_sample, now: float):
+        if not self.position_hold_enabled:
+            return live_sample, "off"
+
+        speed, speed_age, speed_source = self._current_speed_state(now)
+        if self.position_cache is None:
+            self._cache_position_sample(live_sample, now)
+            return live_sample, "init"
+
+        if speed is None:
+            self._cache_position_sample(live_sample, now)
+            return live_sample, speed_source
+
+        if speed > self.position_hold_speed_threshold:
+            self._cache_position_sample(live_sample, now)
+            return live_sample, f"moving:{speed:.2f}m/s"
+
+        cached = dict(self.position_cache)
+        cached["timestamp"] = now
+        return cached, f"stopped:{speed:.2f}m/s"
+
+    def _publish_position_sample(self, sample, now: float):
+        sample, hold_state = self._apply_position_hold(sample, now)
+        fix_time = sample.get("fix_time")
+        fix_age_sec = now - fix_time if fix_time is not None else None
+        self._publish_payload(self._make_payload(
+            status_code=sample["status_code"],
+            status_name=sample["status_name"],
+            lat=sample["lat"],
+            lon=sample["lon"],
+            alt=sample["alt"],
+            frame_id=sample["frame_id"],
+            timestamp=sample["timestamp"],
+        ), fix_age_sec=fix_age_sec, hold_state=hold_state)
+
     def _publish_interpolated_position(self):
         now = time.time()
         if self.last_fix is None:
@@ -385,27 +467,27 @@ class RTKUEBridge(Node):
         alt = self.prev_fix.altitude  + alpha * (self.last_fix.altitude  - self.prev_fix.altitude)
 
         status_code = self.last_fix.status.status
-        self._publish_payload(self._make_payload(
+        self._publish_position_sample(self._make_position_sample(
             status_code=status_code,
-            status_name=self._status_name(status_code),
             lat=lat,
             lon=lon,
             alt=alt,
             frame_id=self.last_fix.header.frame_id,
             timestamp=now,
-        ), fix_age_sec=now - self.last_fix_time if self.last_fix_time is not None else None)
+            fix_time=self.last_fix_time,
+        ), now)
 
     def _publish_position(self, fix_msg: NavSatFix, publish_time: float):
         status_code = fix_msg.status.status
-        self._publish_payload(self._make_payload(
+        self._publish_position_sample(self._make_position_sample(
             status_code=status_code,
-            status_name=self._status_name(status_code),
             lat=fix_msg.latitude,
             lon=fix_msg.longitude,
             alt=fix_msg.altitude,
             frame_id=fix_msg.header.frame_id,
             timestamp=self._fix_timestamp(fix_msg),
-        ), fix_age_sec=publish_time - self.last_fix_time if self.last_fix_time is not None else None)
+            fix_time=self.last_fix_time,
+        ), publish_time)
 
     def _on_img(self, msg: Image):
         if self.pub_img is not None:
