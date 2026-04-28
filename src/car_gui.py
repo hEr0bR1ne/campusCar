@@ -758,6 +758,7 @@ class CarGUI:
         self.lbl_ue_lat = self._kv(gps_panel, "纬度", label_width=8)
         self.lbl_ue_lon = self._kv(gps_panel, "经度", label_width=8)
         self.lbl_ue_alt = self._kv(gps_panel, "海拔", label_width=8)
+        self.lbl_ue_pos_hold = self._kv(gps_panel, "坐标源", label_width=8)
         self.lbl_ue_pos_time = self._kv(gps_panel, "更新时间", label_width=8)
 
         # ── UE 消息面板 ──────────────────────────────────────────────────────
@@ -1081,6 +1082,31 @@ class CarGUI:
             return YELLOW
         return RED
 
+    def _format_position_hold(self, pos):
+        vehicle = pos.get("vehicle") if isinstance(pos, dict) else None
+        hold = vehicle.get("position_hold") if isinstance(vehicle, dict) else None
+        if not isinstance(hold, dict):
+            return "实时 RTK", SUBTEXT
+
+        mode = hold.get("mode")
+        speed = hold.get("speed_mps")
+        cache_age = hold.get("cache_age_sec")
+        if mode == "moving":
+            speed_text = "--" if speed is None else f"{speed:.2f}m/s"
+            return f"移动更新 {speed_text}", GREEN
+        if mode == "stopped":
+            age_text = "--" if cache_age is None else f"{cache_age:.1f}s"
+            return f"静止锁定 缓存{age_text}", YELLOW
+        if mode == "init":
+            return "缓存初始化", GREEN
+        if mode == "no_odom":
+            return "无里程计 实时RTK", YELLOW
+        if mode == "odom_stale":
+            return "里程计过期 实时RTK", YELLOW
+        if mode == "off":
+            return "锁点关闭 实时RTK", SUBTEXT
+        return str(mode or "实时 RTK"), SUBTEXT
+
     def _set_text_content(self, widget: tk.Text, text: str):
         if self._last_raw_display == text:
             return
@@ -1280,11 +1306,14 @@ class CarGUI:
             self.lbl_ue_lat.config(text="等待 /R2UTopic_Pos", fg=SUBTEXT)
             self.lbl_ue_lon.config(text="--", fg=SUBTEXT)
             self.lbl_ue_alt.config(text="--", fg=SUBTEXT)
+            self.lbl_ue_pos_hold.config(text="--", fg=SUBTEXT)
             self.lbl_ue_pos_time.config(text=self._format_age(info["position_time"]), fg=SUBTEXT)
         else:
             self.lbl_ue_lat.config(text=self._format_number(pos.get("latitude"), 8), fg=TEXT)
             self.lbl_ue_lon.config(text=self._format_number(pos.get("longitude"), 8), fg=TEXT)
             self.lbl_ue_alt.config(text=f"{self._format_number(pos.get('altitude'), 2)} m", fg=TEXT)
+            hold_text, hold_color = self._format_position_hold(pos)
+            self.lbl_ue_pos_hold.config(text=hold_text, fg=hold_color)
             self.lbl_ue_pos_time.config(text=self._format_age(info["position_time"]), fg=GREEN)
 
         cmd_raw = info["command_raw"]

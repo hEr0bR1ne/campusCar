@@ -115,6 +115,7 @@ class RTKUEBridge(Node):
         self.position_hold_odom_timeout = max(float(RTK_POSITION_HOLD_ODOM_TIMEOUT_SEC), 0.1)
         self.position_cache = None
         self.position_cache_updated_at = None
+        self.last_position_hold_state = None
 
         self.pub_pos  = self.create_publisher(String, pos_out, 20)
         self.pub_text = self.create_publisher(String, text_out, 10)
@@ -249,6 +250,7 @@ class RTKUEBridge(Node):
             "linear_velocity": odom["linear_velocity"] if odom is not None else None,
             "angular_velocity": angular_velocity,
             "linear_acceleration": linear_acceleration,
+            "position_hold": self.last_position_hold_state,
             "imu_age_sec": finite_float(now - imu["received_at"]) if imu is not None else None,
             "odom_age_sec": finite_float(now - odom["received_at"]) if odom is not None else None,
             "imu_frame_id": imu["frame_id"] if imu is not None else None,
@@ -382,11 +384,24 @@ class RTKUEBridge(Node):
     def _current_speed_state(self, now: float):
         odom = self.last_odom_state
         if odom is None:
-            return None, None, "no-odom"
+            return None, None, "no_odom"
         age = now - odom["received_at"]
         if age > self.position_hold_odom_timeout:
-            return None, age, "odom-stale"
+            return None, age, "odom_stale"
         return odom.get("speed_mps"), age, "odom"
+
+    def _set_position_hold_state(self, *, mode: str, speed=None,
+                                 odom_age=None, cache_age=None):
+        self.last_position_hold_state = {
+            "enabled": self.position_hold_enabled,
+            "mode": mode,
+            "speed_mps": finite_float(speed),
+            "speed_threshold_mps": finite_float(self.position_hold_speed_threshold),
+            "odom_age_sec": finite_float(odom_age),
+            "cache_age_sec": finite_float(cache_age),
+            "cache_ready": self.position_cache is not None,
+            "cache_updated_at": finite_float(self.position_cache_updated_at),
+        }
 
     def _sample_is_valid(self, sample) -> bool:
         return (
@@ -401,23 +416,44 @@ class RTKUEBridge(Node):
 
     def _apply_position_hold(self, live_sample, now: float):
         if not self.position_hold_enabled:
+            self._set_position_hold_state(mode="off")
             return live_sample, "off"
 
         speed, speed_age, speed_source = self._current_speed_state(now)
         if self.position_cache is None:
             self._cache_position_sample(live_sample, now)
+            self._set_position_hold_state(mode="init", speed=speed, odom_age=speed_age, cache_age=0.0)
             return live_sample, "init"
 
         if speed is None:
             self._cache_position_sample(live_sample, now)
+            self._set_position_hold_state(
+                mode=speed_source,
+                speed=speed,
+                odom_age=speed_age,
+                cache_age=0.0,
+            )
             return live_sample, speed_source
 
         if speed > self.position_hold_speed_threshold:
             self._cache_position_sample(live_sample, now)
+            self._set_position_hold_state(
+                mode="moving",
+                speed=speed,
+                odom_age=speed_age,
+                cache_age=0.0,
+            )
             return live_sample, f"moving:{speed:.2f}m/s"
 
         cached = dict(self.position_cache)
         cached["timestamp"] = now
+        cache_age = now - self.position_cache_updated_at if self.position_cache_updated_at is not None else None
+        self._set_position_hold_state(
+            mode="stopped",
+            speed=speed,
+            odom_age=speed_age,
+            cache_age=cache_age,
+        )
         return cached, f"stopped:{speed:.2f}m/s"
 
     def _publish_position_sample(self, sample, now: float):
