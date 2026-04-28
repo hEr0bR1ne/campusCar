@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="4wd_hoverboard">
+  <xacro:arg name="prefix"       default=""/>
+  <xacro:arg name="front_device" default="/dev/ttyUSB0"/>
+  <xacro:arg name="rear_device"  default="/dev/ttyUSB1"/>
+  <xacro:arg name="feedback_format" default="compact"/>
+  <xacro:arg name="wheel_radius" default="0.0825"/>
+  <xacro:arg name="max_velocity" default="1.0"/>
+  <xacro:arg name="command_limit_rpm" default="50"/>
+
+  <xacro:include filename="$(find hoverboard_driver)/urdf/diffbot_description.urdf.xacro"/>
+  <xacro:include filename="$(find hoverboard_driver)/urdf/diffbot.materials.xacro"/>
+  <xacro:include filename="$(find hoverboard_driver)/ros2_control/hoverboard_driver.ros2_control.xacro"/>
+
+  <xacro:diffbot prefix="$(arg prefix)"/>
+
+  <xacro:hoverboard_driver_ros2_control
+    name="HoverboardDriver"
+    prefix="$(arg prefix)"
+    front_device="$(arg front_device)"
+    rear_device="$(arg rear_device)"
+    feedback_format="$(arg feedback_format)"
+    wheel_radius="$(arg wheel_radius)"
+    max_velocity="$(arg max_velocity)"
+    command_limit_rpm="$(arg command_limit_rpm)"/>
+
+</robot>

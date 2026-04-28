@@ -23,7 +23,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import NavSatFix, Image, CompressedImage
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import NavSatFix, Image, CompressedImage, Imu
 from std_msgs.msg import String
 from motion_profile import shape_twist_for_base
 
@@ -98,9 +99,10 @@ def env_list(name: str) -> list[str]:
 
 load_project_env()
 
-CAR_IP          = env_str("CAR_IP", "192.168.100.2")
 CMD_VEL_TOPIC   = env_str("CMD_VEL_TOPIC", "/cmd_vel")
 FIX_TOPIC       = env_str("FIX_TOPIC", "/fix")
+IMU_TOPIC       = env_str("IMU_TOPIC", "/imu")
+ODOM_TOPIC      = env_str("ODOM_TOPIC", "/odom")
 IMAGE_TOPIC     = env_str("IMAGE_TOPIC", "/camera/color/image_raw")
 IMAGE_TOPIC_CANDIDATES = list(dict.fromkeys([
     IMAGE_TOPIC,
@@ -140,6 +142,8 @@ SPEED_BINDINGS = {
 
 TOPICS_TO_MONITOR = [
     (FIX_TOPIC, "RTK原始"),
+    (IMU_TOPIC, "底盘IMU"),
+    (ODOM_TOPIC, "里程计"),
     (IMAGE_TOPIC, "相机图像"),
     (RTK_POS_TOPIC, "UE坐标"),
     (UE_COMMAND_TOPIC, "UE指令"),
@@ -161,6 +165,24 @@ PANEL2   = "#171724"
 
 # 字体（在 main() 里 tk.Tk() 之后初始化，避免 rclpy 信号冲突）
 FONT_TITLE = FONT_NORMAL = FONT_SMALL = FONT_CARD = FONT_BTN = FONT_MONO = None
+
+
+def quaternion_to_yaw(q) -> float:
+    siny = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    return math.atan2(siny, cosy)
+
+
+def yaw_deg_from_quaternion(q) -> float:
+    return math.degrees(quaternion_to_yaw(q)) % 360.0
+
+
+def finite_or_none(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -188,6 +210,8 @@ class CarNode(Node):
         self.ue_command_raw = ""
         self.ue_command_summary = "等待 UE 指令"
         self.ue_command_time = None
+        self.imu_state = None
+        self.odom_state = None
         self.topic_status = {}
         self.rosbridge_ok = False
         self.rosbridge_checked_at = None
@@ -202,6 +226,8 @@ class CarNode(Node):
 
         # 订阅 GPS
         self.create_subscription(NavSatFix, FIX_TOPIC, self._on_fix, 10)
+        self.create_subscription(Imu, IMU_TOPIC, self._on_imu, image_qos)
+        self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, image_qos)
         self.create_subscription(String, RTK_POS_TOPIC, self._on_ue_position, 10)
         self.create_subscription(String, UE_COMMAND_TOPIC, self._on_ue_command, 10)
 
@@ -237,6 +263,54 @@ class CarNode(Node):
             self.fix_time = time.time()
             if self.recording and self.lat is not None:
                 self.path_points.append((self.lat, self.lon, self.alt, time.time()))
+
+    def _on_imu(self, msg: Imu):
+        now = time.time()
+        q = msg.orientation
+        av = msg.angular_velocity
+        la = msg.linear_acceleration
+        with self._lock:
+            self.imu_state = {
+                "time": now,
+                "frame_id": msg.header.frame_id,
+                "yaw_deg": yaw_deg_from_quaternion(q),
+                "angular_velocity": {
+                    "x": finite_or_none(av.x),
+                    "y": finite_or_none(av.y),
+                    "z": finite_or_none(av.z),
+                },
+                "linear_acceleration": {
+                    "x": finite_or_none(la.x),
+                    "y": finite_or_none(la.y),
+                    "z": finite_or_none(la.z),
+                },
+            }
+
+    def _on_odom(self, msg: Odometry):
+        now = time.time()
+        q = msg.pose.pose.orientation
+        lin = msg.twist.twist.linear
+        ang = msg.twist.twist.angular
+        vx = finite_or_none(lin.x)
+        vy = finite_or_none(lin.y)
+        vz = finite_or_none(lin.z)
+        speed = None
+        if vx is not None and vy is not None:
+            speed = math.hypot(vx, vy)
+        with self._lock:
+            self.odom_state = {
+                "time": now,
+                "frame_id": msg.header.frame_id,
+                "child_frame_id": msg.child_frame_id,
+                "yaw_deg": yaw_deg_from_quaternion(q),
+                "speed_mps": speed,
+                "linear_velocity": {"x": vx, "y": vy, "z": vz},
+                "angular_velocity": {
+                    "x": finite_or_none(ang.x),
+                    "y": finite_or_none(ang.y),
+                    "z": finite_or_none(ang.z),
+                },
+            }
 
     def _on_image_raw(self, msg: Image, topic: str):
         frame = self._decode_raw(msg)
@@ -443,6 +517,13 @@ class CarNode(Node):
                 "frame_time": self.frame_time,
             }
 
+    def get_vehicle_state(self):
+        with self._lock:
+            return {
+                "imu": dict(self.imu_state) if isinstance(self.imu_state, dict) else None,
+                "odom": dict(self.odom_state) if isinstance(self.odom_state, dict) else None,
+            }
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GUI 主窗口
@@ -581,6 +662,25 @@ class CarGUI:
         self.topic_labels = {}
         for topic, label in TOPICS_TO_MONITOR:
             self.topic_labels[topic] = self._kv(topics_panel, label, label_width=8)
+
+        # ── 底盘状态面板 ──────────────────────────────────────────────────────
+        vehicle_panel = self._card(right, "底盘状态", fill=tk.X, pady=(0, 8))
+        vehicle_body = tk.Frame(vehicle_panel, bg=BG2)
+        vehicle_body.pack(fill=tk.X)
+        self.heading_canvas = tk.Canvas(
+            vehicle_body, width=92, height=92, bg=BG2,
+            highlightthickness=0, bd=0,
+        )
+        self.heading_canvas.pack(side=tk.LEFT, padx=(0, 10))
+        vehicle_values = tk.Frame(vehicle_body, bg=BG2)
+        vehicle_values.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.lbl_vehicle_heading = self._kv(vehicle_values, "朝向", label_width=8)
+        self.lbl_vehicle_speed = self._kv(vehicle_values, "速度", label_width=8)
+        self.lbl_vehicle_yaw_rate = self._kv(vehicle_values, "角速度", label_width=8)
+        self.lbl_vehicle_accel = self._kv(vehicle_values, "加速度", label_width=8)
+        self.lbl_vehicle_imu_time = self._kv(vehicle_values, "IMU", label_width=8)
+        self.lbl_vehicle_odom_time = self._kv(vehicle_values, "里程计", label_width=8)
+        self._draw_heading(None)
 
         # ── 坐标信息面板 ──────────────────────────────────────────────────────
         gps_panel = self._card(right, "实时经纬度", fill=tk.X, pady=(0, 8))
@@ -864,6 +964,7 @@ class CarGUI:
 
     def _update(self):
         self._update_gps()
+        self._update_vehicle_state()
         self._update_ue_monitor()
         self._update_camera()
         if self._recording:
@@ -920,6 +1021,103 @@ class CarGUI:
         widget.delete("1.0", tk.END)
         widget.insert("1.0", text)
         widget.configure(state=tk.DISABLED)
+
+    def _format_signed(self, value, digits: int = 2, suffix: str = ""):
+        if value is None:
+            return "--"
+        return f"{value:+.{digits}f}{suffix}"
+
+    def _draw_heading(self, yaw_deg):
+        canvas = self.heading_canvas
+        canvas.delete("all")
+        w = int(canvas["width"])
+        h = int(canvas["height"])
+        cx, cy = w / 2, h / 2
+        radius = min(w, h) / 2 - 9
+        canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius,
+                           outline=SUBTEXT, width=1)
+        canvas.create_text(cx, cy - radius + 8, text="N", fill=SUBTEXT, font=FONT_SMALL)
+        canvas.create_text(cx + radius - 8, cy, text="E", fill=SUBTEXT, font=FONT_SMALL)
+        canvas.create_text(cx, cy + radius - 8, text="S", fill=SUBTEXT, font=FONT_SMALL)
+        canvas.create_text(cx - radius + 8, cy, text="W", fill=SUBTEXT, font=FONT_SMALL)
+        if yaw_deg is None:
+            canvas.create_text(cx, cy, text="--", fill=SUBTEXT, font=FONT_NORMAL)
+            return
+        yaw = math.radians(yaw_deg)
+        end_x = cx + math.cos(yaw) * (radius - 14)
+        end_y = cy - math.sin(yaw) * (radius - 14)
+        canvas.create_line(cx, cy, end_x, end_y, fill=ACCENT, width=4, arrow=tk.LAST)
+        canvas.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill=ACCENT, outline=ACCENT)
+
+    def _update_vehicle_state(self):
+        state = self.node.get_vehicle_state()
+        imu = state.get("imu")
+        odom = state.get("odom")
+        now = time.time()
+
+        heading = None
+        heading_source = None
+        if imu is not None and now - imu.get("time", 0.0) <= 3.0:
+            heading = imu.get("yaw_deg")
+            heading_source = "IMU"
+        elif odom is not None and now - odom.get("time", 0.0) <= 3.0:
+            heading = odom.get("yaw_deg")
+            heading_source = "odom"
+        self._draw_heading(heading)
+
+        if heading is None:
+            self.lbl_vehicle_heading.config(text="等待 /imu 或 /odom", fg=SUBTEXT)
+        else:
+            self.lbl_vehicle_heading.config(
+                text=f"{heading:.1f}° ENU ({heading_source})",
+                fg=GREEN if heading_source == "IMU" else YELLOW,
+            )
+
+        if odom is None or odom.get("speed_mps") is None:
+            self.lbl_vehicle_speed.config(text="等待 /odom", fg=SUBTEXT)
+        else:
+            vx = odom.get("linear_velocity", {}).get("x")
+            vy = odom.get("linear_velocity", {}).get("y")
+            self.lbl_vehicle_speed.config(
+                text=f"{odom['speed_mps']:.2f} m/s  vx={self._format_signed(vx)} vy={self._format_signed(vy)}",
+                fg=self._age_color(odom.get("time"), 1.5, 5.0),
+            )
+
+        yaw_rate = None
+        yaw_rate_source = None
+        if imu is not None:
+            yaw_rate = imu.get("angular_velocity", {}).get("z")
+            yaw_rate_source = "IMU"
+        if yaw_rate is None and odom is not None:
+            yaw_rate = odom.get("angular_velocity", {}).get("z")
+            yaw_rate_source = "odom"
+        if yaw_rate is None:
+            self.lbl_vehicle_yaw_rate.config(text="等待角速度", fg=SUBTEXT)
+        else:
+            self.lbl_vehicle_yaw_rate.config(
+                text=f"{self._format_signed(yaw_rate, 3)} rad/s ({yaw_rate_source})",
+                fg=TEXT,
+            )
+
+        accel = imu.get("linear_acceleration", {}) if imu is not None else {}
+        ax, ay, az = accel.get("x"), accel.get("y"), accel.get("z")
+        if ax is None or ay is None or az is None:
+            self.lbl_vehicle_accel.config(text="等待 /imu", fg=SUBTEXT)
+        else:
+            planar = math.hypot(ax, ay)
+            self.lbl_vehicle_accel.config(
+                text=f"xy={planar:.2f}  x={self._format_signed(ax)} y={self._format_signed(ay)} z={az:.2f} m/s²",
+                fg=self._age_color(imu.get("time"), 1.5, 5.0),
+            )
+
+        self.lbl_vehicle_imu_time.config(
+            text=self._format_age(imu.get("time") if imu is not None else None),
+            fg=self._age_color(imu.get("time") if imu is not None else None, 1.5, 5.0),
+        )
+        self.lbl_vehicle_odom_time.config(
+            text=self._format_age(odom.get("time") if odom is not None else None),
+            fg=self._age_color(odom.get("time") if odom is not None else None, 1.5, 5.0),
+        )
 
     def _update_ue_monitor(self):
         info = self.node.get_ue_monitor()

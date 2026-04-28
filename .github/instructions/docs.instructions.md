@@ -1,5 +1,5 @@
 ---
-name: "campusCar docs rules"
+name: "campusCar-new-chassis docs rules"
 description: "Path-specific rules for operator and integration docs under docs/"
 applyTo: "docs/**/*.md"
 ---

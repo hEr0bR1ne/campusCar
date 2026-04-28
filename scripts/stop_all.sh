@@ -67,6 +67,13 @@ pkill -f "car_gui.py"          2>/dev/null && echo "✅ car_gui 已停止" || tr
 pkill -f "ue_bridge.py"        2>/dev/null && echo "✅ ue_bridge 已停止" || true
 pkill -f "keyboard_control.py" 2>/dev/null && echo "✅ keyboard_control 已停止" || true
 pkill -f "move.py"             2>/dev/null && echo "✅ move.py 已停止" || true
+if [ "${#CHASSIS_STOP_PATTERNS[@]}" -gt 0 ]; then
+    for pattern in "${CHASSIS_STOP_PATTERNS[@]}"; do
+        [ -n "$pattern" ] && pkill -f "$pattern" 2>/dev/null && echo "✅ 底盘进程已停止: $pattern" || true
+    done
+elif [ -n "${CHASSIS_PROCESS_PATTERN:-}" ]; then
+    pkill -f "$CHASSIS_PROCESS_PATTERN" 2>/dev/null && echo "✅ 底盘进程已停止" || true
+fi
 
 echo ""
 echo "✅ 全栈已停止"

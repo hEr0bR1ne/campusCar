@@ -36,6 +36,9 @@ source "${PROJECT_ROOT}/config/robot.env"
 LOGDIR="${PROJECT_ROOT}/data/logs"
 
 [ -f "$ROS_SETUP" ] && source "$ROS_SETUP"
+for setup_file in "${CHASSIS_SETUP_FILES[@]}"; do
+    [ -f "$setup_file" ] && source "$setup_file"
+done
 for setup_file in "${CAMERA_SETUP_FILES[@]}"; do
     [ -f "$setup_file" ] && source "$setup_file"
 done
@@ -65,20 +68,45 @@ echo "  Camera:  ${CAMERA_ADAPTER} / ${CAMERA_START_MODE}"
 
 # 1. 网络
 echo ""
-echo "【网络】"
-if [ -z "${CAR_IP:-}" ] || [ "${CHASSIS_REQUIRED:-0}" = "0" ]; then
-    echo "ℹ️ 底盘网络检查跳过"
-elif ping -c 1 -W 2 "$CAR_IP" > /dev/null 2>&1; then
-    echo "✅ 底盘 ($CAR_IP): ping OK"
+echo "【新底盘连接】"
+if [ "${CHASSIS_DEPENDENCY_MODE:-none}" = "hoverboard_ros2_control" ]; then
+    for dev in "${HOVERBOARD_FRONT_DEVICE:-}" "${HOVERBOARD_REAR_DEVICE:-}"; do
+        [ -n "$dev" ] || continue
+        if [ -e "$dev" ]; then
+            echo "✅ 串口设备: $dev"
+        else
+            echo "❌ 串口设备不存在: $dev"
+        fi
+    done
 else
-    echo "❌ 底盘 ($CAR_IP): 不可达"
+    echo "ℹ️ 当前 profile 未配置 STM32 hoverboard 底盘"
 fi
+
+echo ""
+echo "【底盘驱动】"
+if [ "${CHASSIS_DEPENDENCY_MODE:-none}" = "hoverboard_ros2_control" ]; then
+    ros2 pkg prefix hoverboard_driver >/dev/null 2>&1 && echo "✅ hoverboard_driver 已安装" || echo "❌ hoverboard_driver 未安装"
+    ros2 pkg prefix controller_manager >/dev/null 2>&1 && echo "✅ controller_manager 已安装" || echo "❌ controller_manager 未安装"
+    ros2 pkg prefix diff_drive_controller >/dev/null 2>&1 && echo "✅ diff_drive_controller 已安装" || echo "❌ diff_drive_controller 未安装"
+fi
+CHASSIS_PGREP_FILE="/tmp/campuscar_chassis_pgrep.$$"
+if [ -n "${CHASSIS_PROCESS_PATTERN:-}" ]; then
+    if pgrep -a -f "$CHASSIS_PROCESS_PATTERN" > "$CHASSIS_PGREP_FILE" 2>/dev/null; then
+        head -1 "$CHASSIS_PGREP_FILE"
+        echo "✅ 底盘进程"
+    else
+        echo "❌ 底盘进程未运行"
+    fi
+elif [ "${CHASSIS_START_MODE:-skip}" = "skip" ]; then
+    echo "ℹ️ 当前 profile 未配置自动底盘驱动"
+fi
+rm -f "$CHASSIS_PGREP_FILE"
 
 # 2. ROS2 话题
 echo ""
 echo "【ROS2 话题】"
 TOPICS=$(ros2 topic list 2>/dev/null)
-for t in "${CMD_VEL_TOPIC}" /odom /imu /battery "${FIX_TOPIC}" "${RTK_POS_TOPIC}" "${RTK_TEXT_TOPIC}" "${UE_COMMAND_TOPIC}" "${IMAGE_TOPIC}"; do
+for t in "${CMD_VEL_TOPIC}" "${ODOM_TOPIC:-/odom}" "${IMU_TOPIC:-/imu}" /battery "${FIX_TOPIC}" "${RTK_POS_TOPIC}" "${RTK_TEXT_TOPIC}" "${UE_COMMAND_TOPIC}" "${IMAGE_TOPIC}"; do
     if echo "$TOPICS" | grep -q "$t"; then
         echo "✅ $t"
     else

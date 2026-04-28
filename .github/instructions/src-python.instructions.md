@@ -1,5 +1,5 @@
 ---
-name: "campusCar source rules"
+name: "campusCar-new-chassis source rules"
 description: "Path-specific rules for ROS2 and Python source files under src/"
 applyTo: "src/**/*.py"
 ---

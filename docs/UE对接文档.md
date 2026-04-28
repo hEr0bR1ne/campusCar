@@ -124,6 +124,54 @@ rtsp://192.168.100.1:8554/robot_cam
 
 > 新的导航指令会自动取消上一个未完成的导航任务。
 
+---
+
+### 小车状态回传
+
+NUC 会在 `/R2UTopic_Pos` 上按 `UE_PUBLISH_RATE` 固定频率发送 `std_msgs/String` JSON。原有 RTK 字段保持不变，并额外追加 `vehicle` 对象，UE 可以和 RTK 位置一起读取车体朝向、速度、角速度、加速度：
+
+```json
+{
+  "status": 2,
+  "status_name": "PPS_FIX",
+  "latitude": 22.65432100,
+  "longitude": 113.12345600,
+  "altitude": 12.3,
+  "timestamp": 1777355686.91,
+  "frame_id": "gps",
+  "vehicle": {
+    "heading_source": "imu",
+    "yaw_rad": -1.82,
+    "yaw_deg": 255.7,
+    "speed_mps": 0.18,
+    "linear_velocity": {"x": 0.18, "y": 0.0, "z": 0.0},
+    "angular_velocity": {"x": 0.0, "y": -0.001, "z": -0.002},
+    "linear_acceleration": {"x": 0.06, "y": 0.11, "z": 9.79},
+    "imu_age_sec": 0.02,
+    "odom_age_sec": 0.02,
+    "imu_frame_id": "imu",
+    "odom_frame_id": "odom",
+    "odom_child_frame_id": "base_footprint",
+    "imu_timestamp": 1777355686.91,
+    "odom_timestamp": 1777355686.91
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 来源 | 说明 |
+|------|------|------|
+| `vehicle.heading_source` | `/imu` 或 `/odom` | 当前 yaw 优先取 IMU；IMU 不新鲜时回退 odom |
+| `vehicle.yaw_deg` / `yaw_rad` | `/imu.orientation` 优先 | ENU 坐标系，0° 为东，90° 为北 |
+| `vehicle.speed_mps` | `/odom.twist` | 底盘估计线速度模长 |
+| `vehicle.linear_velocity` | `/odom.twist.twist.linear` | odom 线速度分量 |
+| `vehicle.angular_velocity` | `/imu.angular_velocity` 优先 | 车体角速度，尤其 `z` 可看转向速率 |
+| `vehicle.linear_acceleration` | `/imu.linear_acceleration` | 车体加速度，静止时 `z` 约为重力加速度 |
+| `vehicle.imu_age_sec` / `odom_age_sec` | NUC 接收时间 | 数值越小表示数据越新 |
+
+旧 UE 逻辑如果只解析 `latitude/longitude/altitude` 可以忽略 `vehicle`；新 UE 逻辑建议先判断字段是否为 `null`，再用于显示或动画。
+
 如果 UE 发的是场景坐标，而不是 WGS84 经纬度，也保持同一个 JSON 格式，只在 NUC 的 `config/robot.env` 或当前 `config/profiles/<profile>.env` 配置坐标转换：
 
 ```bash

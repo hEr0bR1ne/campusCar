@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=campusCar - 路径录制
-Comment=记录 GPS 路径并在 RViz 中可视化
-Exec=gnome-terminal -- bash -lc "source '$HOME/campusCar/config/robot.env' && source \"\$ROS_SETUP\" && python3 '$HOME/campusCar/src/rtk_tools/path_recorder.py'; echo; read -p 'Press Enter to close...'"
+Name=campusCar - 新底盘路径录制
+Comment=记录 STM32 新底盘 GPS 路径并在 RViz 中可视化
+Exec=gnome-terminal -- bash -lc "cd /home/hkust-gz-nuc/campusCar-new-chassis && export ROBOT_PROFILE=stm32_hoverboard_4wd && source config/robot.env && source \"\$ROS_SETUP\" && python3 src/rtk_tools/path_recorder.py; echo; read -p 'Press Enter to close...'"
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;

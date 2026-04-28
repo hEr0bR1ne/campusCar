@@ -22,43 +22,42 @@
 
 ## Current Open Focus
 
-- Active branch for the hardware reuse work is `codex/hardware-adapter-refactor` in the main `~/campusCar` workspace.
+- Active branch for the new STM32/Hikrobot chassis work is `hardware/new-stm32-hikrobot` in the independent `~/campusCar-new-chassis` workspace.
+- This workspace was moved out of `~/campusCar/_forks` on 2026-04-28 so new-chassis work and seller materials no longer live under the old chassis project directory.
 - `origin/main` has been merged into this branch on 2026-04-28; conflict resolution kept the profile-based hardware adapter design and absorbed the useful main-branch checkpoint/context.
-- Main design: `config/robot.env` is a common loader; chassis/camera differences live under `config/profiles/*.env`; startup/check/stop/deploy/control scripts accept `--profile NAME`.
+- Main design: this branch is new STM32 chassis only. `config/robot.env` defaults to `stm32_hoverboard_4wd`; startup/check/stop/deploy/control scripts may still accept `--profile NAME`, but `campus_car` is no longer present or supported.
+- Docker isolation is through `docker/Dockerfile.humble`, `scripts/docker_build.sh`, and `scripts/docker_run_stm32.sh`; old chassis Docker entrypoints were removed.
 
-- Current 4WD movement-control baseline:
-  - Pure `a/d`, left/right arrow, GUI button `A/D`, and UE `TurnLeft`/`TurnRight` now pass through `src/motion_profile.py`.
-  - After the user reported the X/Z opposite profile caused a very large turning radius, the default was changed back to zero-linear pure angular mode: `(0.0, 0.5)` stays `(0.0, 0.5)`, while combined movement such as `w+a`/`w+d` is still left unchanged as travelling-turn control.
-  - Tank-turn related tuning lives in `config/robot.env`: `TANK_TURN_MODE=angular` is the safe default; `experimental_xz` exists only for controlled testing because the current base treats `linear.x` as translation.
-  - The current old-car profile exports `BASE_TYPE=4WD` through `CAR_BASE_TYPE` before launching `base_control_ros2`, matching the hardware self-report seen in remote logs.
+- Chassis memory now lives in `.codex-memory/systems/new-chassis.md`; the old chassis memory file was removed from this branch to prevent accidental reintroduction.
 
-- Pending adaptive refactor discussion:
-  - User clarified on 2026-04-28 that the next larger direction is to support two additional robot cars whose chassis and cameras differ from the current campusCar setup.
-  - The intended refactor should move the project away from single-car hardcoded assumptions toward selectable per-car profiles for chassis network/startup/control and camera driver/topic/streaming details.
-  - New chassis architecture differs from the current car: it is not NUC -> Orange Pi -> chassis; the NUC connects directly to the chassis.
-  - New chassis control detail: the direct chassis is STM32-based and controlled from the NUC over UART serial.
-  - Seller-provided package found at `_forks/hoverboard-driver-humble.zip`; it is a ROS2 Humble `ros2_control` hoverboard/differential-drive hardware interface, not a camera package.
-  - The package sends UART command frames with start `0xABCD`, `int16 steer`, `int16 speed`, and XOR checksum, and expects hoverboard-firmware-style feedback frames. It is only directly usable if the STM32 firmware speaks that protocol or can be changed to match it.
-  - Current NUC ROS environment is missing required `ros2_control` packages such as `controller_manager`, `diff_drive_controller`, `joint_state_broadcaster`, and `ros2_control`; deployment must add them before this package can run.
-  - `_forks/campusCar-hardware-reuse` is the package intended to be installed/flashed onto other robot cars for future hardware reuse and migration work. Treat it as a key source when preparing other-car deployment, not as disposable reference material.
-  - New camera selection: Hikrobot/Hikvision industrial camera `MV-CS016-10GC`.
-  - Camera facts researched on 2026-04-28: `MV-CS016-10GC` is a color 1.6 MP GigE area-scan camera, 1440x1080, up to 65.2 fps, Sony IMX296 global shutter, GigE Vision V2.0 and GenICam compatible, powered by 9-24 VDC or PoE. Vendor support said no ROS-specific materials are provided.
-  - Recommended ROS2 direction for this camera is to first try `camera_aravis2` on Humble because the camera is GigE Vision/GenICam compatible and `ros-humble-camera-aravis2` is available from apt; fallback is wrapping Hikrobot MVS SDK into a ROS2 image publisher if Aravis cannot configure the device reliably.
-  - Hikrobot camera integration is staged through `config/profiles/hikrobot_gige.env`; it skips chassis startup and starts `scripts/hikrobot_camera_start.sh`, which runs `camera_aravis2 camera_driver_gv`, remaps `/hikrobot_camera/image_raw` to the project `IMAGE_TOPIC`, and writes generated params to `data/logs/hikrobot_aravis_params.yaml`.
-  - `scripts/hikrobot_camera_probe.sh` is the first test entry when the camera arrives; it checks `camera_aravis2`, `arv-tool-0.8`, Aravis enumeration, and ROS2 `camera_finder`.
-  - Installed local runtime packages on 2026-04-28: `ros-humble-camera-aravis2`, `ros-humble-camera-aravis2-msgs`, `aravis-tools`, `aravis-tools-cli`, and `libaravis-0.8-0`. `apt-get update` showed a Google Chrome source timeout, but the ROS/Aravis packages installed successfully.
-  - Remaining missing details: exact STM32 UART chassis protocol, serial device/baud confirmation, and whether both new cars use the same Hikrobot camera/profile.
+- Current new-chassis focus:
+  - Continue new-bottom-board work through the `stm32_hoverboard_4wd` profile and `template.env`, not through the old `campus_car` profile.
+  - The new direct chassis is STM32 UART based and should use the seller-confirmed `0xABCD` steer/speed/checksum protocol with two serial ports for front/rear drivers.
+  - STM32 hoverboard-style chassis integration is staged in `config/profiles/stm32_hoverboard_4wd.env`, `hardware/hoverboard_driver`, `scripts/stm32_hoverboard_start.sh`, and `scripts/stm32_hoverboard_probe.sh`.
+  - Seller reply confirms `steer/speed` command range `[-1000,1000]`; the staged profile/driver now defaults to `HOVERBOARD_COMMAND_LIMIT_RPM=50` for arrival-day safety.
+  - The integrated hoverboard driver can use compact feedback `speedR_meas/speedL_meas` as wheel velocity feedback, but current seller feedback has no encoder tick counts; full encoder position feedback needs firmware/full feedback frames with `wheelR_cnt/wheelL_cnt`.
+  - Remaining validation: exact serial device naming, sign convention, safe RPM limits under load, and whether both new cars share the same Hikrobot camera settings.
 
-- Shutdown checkpoint for 2026-04-27:
-  - Current branch is `codex/full-stack-ue-rtk-gui`.
-  - Code version was pushed to GitHub; local HEAD and `origin/codex/full-stack-ue-rtk-gui` were aligned at `c46310d Normalize quoted UE command payloads` before this checkpoint edit.
-  - The latest working UE integration uses `src/rosbridge_bson_tcp.py` on TCP/BSON port `9090`, not the old rosbridge WebSocket launch.
-  - `/U2RTopic_Command` compatibility is in `src/rosbridge_bson_tcp.py`: UE command payloads sent as a BSON dict, as `{data: dict}`, or as an extra-quoted JSON string like `"{"commandId":...}"` are normalized into `std_msgs/String.data`.
-  - The successful end-to-end smoke test used a safe `Stop` command and produced `方向指令：Stop  停车` in `data/logs/ue_bridge.log`.
-  - Camera startup was optimized to reuse an already publishing Orbbec camera by default and the GUI now prefers local MJPEG frames for faster display.
-  - Known hardware note: current Orbbec connection showed `USB2.1` / 480M and cold camera initialization around 40 seconds; USB3 cabling/port is still the likely hardware fix.
-  - Next recommended step after reboot: run `cd ~/campusCar && ./scripts/launch_all.sh`, ask UE to resend the standard coordinate command, then watch `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, and `data/logs/ue_bridge.log`.
-  - If UE still reaches the bridge but movement does not start, inspect RTK `/fix` and `/heading` readiness rather than JSON transport first.
+- Current Docker focus:
+  - Docker is the preferred main environment isolation path for ROS2/apt dependencies; Conda should remain for offline Python tools only.
+  - Docker is installed on the NUC, the daemon is active, and the user `hkust-gz-nuc` is in the `docker` group. Existing shells may still need `newgrp docker` or relogin; `sg docker -c '...'` works immediately.
+  - The local Docker image `campuscar:humble` was built successfully on 2026-04-28. Direct Docker Hub pulls failed, so the successful build used base image `docker.m.daocloud.io/library/ros:humble-ros-base-jammy`.
+  - The Docker image includes ROS2 Humble, rosbridge, RTK/video dependencies, Aravis/Hikrobot packages, `ros2_control`, `diff_drive_controller`, `controller_manager`, Cyclone DDS support, and mediamtx.
+  - Runtime still uses host network and host hardware devices because ROS2 DDS, video ports, USB/TTL, RTK, and GigE Vision require host integration.
+  - Use `./scripts/docker_run_stm32.sh` for the STM32/Hikrobot profile.
+  - Desktop launchers now call `scripts/desktop_run_stm32.sh`, which uses the STM32 Docker entry and falls back to `sg docker` when the current login session has not refreshed docker-group membership.
+  - `scripts/bind_ch341_serial.sh` auto-binds unbound CH340 USB serial adapters before STM32 launch/probe, because the first detected CH340 initially appeared in `lsusb` without creating `/dev/ttyUSB0`.
+  - Docker install helper is `./scripts/install_docker.sh`; local sudo automation can be configured through ignored `config/robot.local.env`. Do not copy raw sudo secrets into `.codex-memory/`.
+  - `hoverboard_driver` was rebuilt successfully inside the new STM32 container after fixing its missing `rclcpp` include and making `deploy_dependencies.sh` use `hoverboard_ws/` as the colcon workspace. After moving this project to `~/campusCar-new-chassis`, `hoverboard_ws/` was rebuilt there so its colcon paths no longer reference the old workspace.
+  - Software-level new STM32 container probe passes for ROS2 dependencies and `hoverboard_driver`; `/dev/ttyUSB0` and `/dev/ttyUSB1` still show missing when running with `--no-devices` or without the chassis connected.
+  - Current physical serial state after CH340 binding: front is mapped locally to `/dev/serial/by-path/pci-0000:00:14.0-usb-0:3.2:1.0-port0`; rear `/dev/ttyUSB1` is still missing until the second USB-TTL/front-rear driver link is connected or identified.
+
+- Current branch checkpoint:
+  - Active branch is `hardware/new-stm32-hikrobot`, now treated as the new chassis branch.
+  - Old chassis runtime files were removed: `config/profiles/campus_car.env`, `scripts/docker_run_old.sh`, `docker/compose.old_chassis.yml`, and `.codex-memory/systems/old-chassis.md`.
+  - Seller-provided new-chassis package, answer document, and `hoverboard_ws/` build workspace now live under `~/campusCar-new-chassis/`, not under `~/campusCar`.
+  - `src/rosbridge_bson_tcp.py` remains the UE TCP/BSON compatibility point on port `9090`.
+  - Next hardware step after reboot: run `cd ~/campusCar-new-chassis && ./scripts/stm32_hoverboard_probe.sh`, confirm the two serial devices, then run `./scripts/hikrobot_camera_probe.sh` and only then start through the STM32 Docker path or the fixed desktop launcher.
 
 ## Update Trigger
 

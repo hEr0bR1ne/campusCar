@@ -1,5 +1,5 @@
 ---
-name: "campusCar script rules"
+name: "campusCar-new-chassis script rules"
 description: "Path-specific rules for automation scripts under scripts/"
 applyTo: "scripts/**/*.sh"
 ---

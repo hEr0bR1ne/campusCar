@@ -1,6 +1,7 @@
-# campusCar repository instructions for GitHub Copilot
+# campusCar-new-chassis repository instructions for GitHub Copilot
 
 - Respond in Chinese unless the user explicitly asks for another language.
+- This repository is the canonical new STM32 chassis workspace at `~/campusCar-new-chassis`.
 - Before making substantive changes, load the shared project memory files:
   - [Project Overview](../.codex-memory/project-overview.md)
   - [Current Context](../.codex-memory/current-context.md)

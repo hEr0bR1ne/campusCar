@@ -1,0 +1,60 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 10  # Hz
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    hoverboard_base_controller:
+      type: diff_drive_controller/DiffDriveController
+
+hoverboard_base_controller:
+  ros__parameters:
+    # Four-wheel drive: front and rear joints on each side share the same command
+    left_wheel_names:  ["front_left_wheel_joint",  "rear_left_wheel_joint"]
+    right_wheel_names: ["front_right_wheel_joint", "rear_right_wheel_joint"]
+
+    # Robot geometry (600mm x 450mm body, wheels at body edges)
+    wheel_separation: 0.45        # center-to-center left/right: 450mm
+    wheel_radius:     0.0825      # 82.5mm
+
+    wheel_separation_multiplier:   1.0
+    left_wheel_radius_multiplier:  1.0
+    right_wheel_radius_multiplier: 1.0
+
+    publish_rate:   50.0
+    odom_frame_id:  odom
+    base_frame_id:  base_link
+    pose_covariance_diagonal:  [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
+    twist_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
+
+    # Seller says the actual campusCar STM32/driver feedback has no encoder
+    # ticks. Keep odometry open-loop and use velocity-oriented feedback only.
+    open_loop:         true
+    position_feedback: false
+    enable_odom_tf:    true
+
+    cmd_vel_timeout:  0.5
+    use_stamped_vel:  false
+
+    # Velocity and acceleration limits
+    linear.x.has_velocity_limits:    true
+    linear.x.has_acceleration_limits: true
+    linear.x.has_jerk_limits:        false
+    # Conservative arrival-day limits. Seller's previous ROS1 safe value was
+    # 50 RPM, while firmware can go much higher.
+    linear.x.max_velocity:    0.30
+    linear.x.min_velocity:   -0.30
+    linear.x.max_acceleration: 0.50
+    linear.x.max_jerk: 0.0
+    linear.x.min_jerk: 0.0
+
+    angular.z.has_velocity_limits:    true
+    angular.z.has_acceleration_limits: true
+    angular.z.has_jerk_limits:        false
+    angular.z.max_velocity:    0.60
+    angular.z.min_velocity:   -0.60
+    angular.z.max_acceleration: 0.80
+    angular.z.min_acceleration: -0.80
+    angular.z.max_jerk: 0.0
+    angular.z.min_jerk: 0.0

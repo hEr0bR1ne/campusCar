@@ -1,0 +1,16 @@
+.git
+.codex
+.claude
+.vscode
+data/logs
+data/recorded_paths
+data/camera_images
+orbbec_ws
+hoverboard_ws
+src/rtk_tools/rosbridge_ts
+_forks
+__pycache__
+*.pyc
+*.pyo
+*.swp
+*.swo

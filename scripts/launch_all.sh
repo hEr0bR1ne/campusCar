@@ -14,7 +14,7 @@ Start the full campusCar stack. Hardware-specific chassis/camera settings are
 loaded from config/profiles/<profile>.env.
 
 Options:
-  --profile NAME   Robot hardware profile, default: campus_car
+  --profile NAME   Robot hardware profile, default: stm32_hoverboard_4wd
   -h, --help       Show this help
 EOF
 }
@@ -173,10 +173,23 @@ reset_camera_usb() {
 source_setup_files() {
     local setup_file
     [ -f "$ROS_SETUP" ] && source "$ROS_SETUP"
+    for setup_file in "${CHASSIS_SETUP_FILES[@]}"; do
+        [ -f "$setup_file" ] && source "$setup_file"
+    done
     for setup_file in "${CAMERA_SETUP_FILES[@]}"; do
         [ -f "$setup_file" ] && source "$setup_file"
     done
     [ -f "$TS_BRIDGE_SETUP" ] && source "$TS_BRIDGE_SETUP"
+}
+stop_chassis_processes() {
+    local pattern
+    if [ "${#CHASSIS_STOP_PATTERNS[@]}" -gt 0 ]; then
+        for pattern in "${CHASSIS_STOP_PATTERNS[@]}"; do
+            [ -n "$pattern" ] && pkill -f "$pattern" 2>/dev/null || true
+        done
+    elif [ -n "${CHASSIS_PROCESS_PATTERN:-}" ]; then
+        pkill -f "$CHASSIS_PROCESS_PATTERN" 2>/dev/null || true
+    fi
 }
 stop_camera_processes() {
     local pattern
@@ -188,72 +201,54 @@ stop_camera_processes() {
         pkill -f "$CAMERA_PROCESS_PATTERN" 2>/dev/null || true
     fi
 }
-check_chassis_network() {
+check_chassis_prereqs() {
     if [ "${CHASSIS_START_MODE:-skip}" = "skip" ] || [ "${CHASSIS_REQUIRED:-0}" = "0" ]; then
-        warn "当前 profile 未要求自动检查底盘网络"
-        return 0
-    fi
-    if [ -z "${CAR_IP:-}" ]; then
-        warn "当前 profile 未配置 CAR_IP，跳过底盘网络检查"
+        warn "当前 profile 未要求底盘启动前检查"
         return 0
     fi
 
-    log "检查底盘网络 ($CAR_IP)..."
-    if ping -c 1 -W 3 "$CAR_IP" > /dev/null 2>&1; then
-        ok "底盘网络正常"
-    else
-        err "无法 ping 通底盘，请检查交换机连接或当前 profile"
-        read -p "按 Enter 退出..."
-        exit 1
-    fi
-}
-chassis_node_running_ssh() {
-    local check_cmd="${CHASSIS_NODE_CHECK_CMD:-}"
-    if [ -z "$check_cmd" ]; then
-        if [ -n "${CHASSIS_NODE_CHECK_PATTERN:-}" ]; then
-            check_cmd="ros2 node list 2>/dev/null | grep -q ${CHASSIS_NODE_CHECK_PATTERN}"
-        else
-            return 1
+    if [ "${CHASSIS_DEPENDENCY_MODE:-none}" = "hoverboard_ros2_control" ]; then
+        "${PROJECT_ROOT}/scripts/bind_ch341_serial.sh" || true
+
+        [ -f "$HOVERBOARD_SETUP" ] || {
+            err "hoverboard_driver 未构建：$HOVERBOARD_SETUP"
+            echo "请先运行：./scripts/deploy_dependencies.sh --profile ${ROBOT_PROFILE}"
+            exit 1
+        }
+
+        local dev
+        for dev in "$HOVERBOARD_FRONT_DEVICE" "$HOVERBOARD_REAR_DEVICE"; do
+            if [ ! -e "$dev" ]; then
+                err "新底盘串口不存在：$dev"
+                echo "先运行 ./scripts/stm32_hoverboard_probe.sh，确认串口后写入 config/profiles/${ROBOT_PROFILE}.local.env"
+                exit 1
+            fi
+        done
+        if [ "$(readlink -f "$HOVERBOARD_FRONT_DEVICE" 2>/dev/null || printf '%s' "$HOVERBOARD_FRONT_DEVICE")" = "$(readlink -f "$HOVERBOARD_REAR_DEVICE" 2>/dev/null || printf '%s' "$HOVERBOARD_REAR_DEVICE")" ]; then
+            err "前后驱动器串口指向同一个设备：$HOVERBOARD_FRONT_DEVICE"
+            exit 1
         fi
+        ok "新底盘串口检查通过"
     fi
-    sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" "$check_cmd" 2>/dev/null
 }
 start_chassis() {
     case "${CHASSIS_START_MODE:-skip}" in
         skip)
             warn "当前 profile 未配置自动底盘启动，跳过底盘启动"
             ;;
-        ssh_ros2)
-            need_cmd sshpass
-            if [ -z "${CAR_IP:-}" ] || [ -z "${CAR_USER:-}" ]; then
-                err "ssh_ros2 底盘模式需要 CAR_IP 和 CAR_USER"
-                exit 1
-            fi
-            if [ -z "${CAR_PASS:-}" ]; then
-                err "ssh_ros2 底盘模式需要 CAR_PASS；请写入 config/profiles/${ROBOT_PROFILE}.local.env"
-                exit 1
-            fi
-            log "检查底盘节点..."
-            if chassis_node_running_ssh; then
-                ok "底盘节点已运行"
-            else
-                [ -n "${CAR_LAUNCH_CMD:-}" ] || { err "未配置 CAR_LAUNCH_CMD"; exit 1; }
-                log "远程启动底盘节点..."
-                sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" \
-                    "nohup bash -lc '${CAR_LAUNCH_CMD}' > ${CHASSIS_LOG_FILE} 2>&1 &" 2>/dev/null
-                sleep 5
-                ok "底盘启动命令已发送"
-            fi
-            ;;
         local_command)
             [ -n "${LOCAL_CHASSIS_LAUNCH_CMD:-}" ] || { err "local_command 底盘模式需要 LOCAL_CHASSIS_LAUNCH_CMD"; exit 1; }
             log "启动本地底盘驱动..."
             nohup setsid bash -lc "$LOCAL_CHASSIS_LAUNCH_CMD" > "$LOGDIR/chassis.log" 2>&1 &
             sleep 2
-            ok "本地底盘启动命令已发送"
+            if [ -n "${CHASSIS_PROCESS_PATTERN:-}" ] && pgrep -f "$CHASSIS_PROCESS_PATTERN" >/dev/null 2>&1; then
+                ok "本地底盘驱动已运行"
+            else
+                warn "本地底盘启动命令已发送，但暂未匹配到底盘进程；检查 $LOGDIR/chassis.log"
+            fi
             ;;
         *)
-            err "未知 CHASSIS_START_MODE: ${CHASSIS_START_MODE}"
+            err "未知 CHASSIS_START_MODE: ${CHASSIS_START_MODE}。此分支只支持 local_command/skip 新底盘模式。"
             exit 1
             ;;
     esac
@@ -382,8 +377,8 @@ echo "  Profile: ${ROBOT_PROFILE} (${ROBOT_NAME})"
 echo "  Chassis: ${CHASSIS_ADAPTER} / ${CHASSIS_START_MODE}"
 echo "  Camera:  ${CAMERA_ADAPTER} / ${CAMERA_START_MODE}"
 
-# ── 1. 杀掉旧进程 ────────────────────────────────────────────
-log "清理旧进程..."
+# ── 1. 清理已有进程 ──────────────────────────────────────────
+log "清理已有进程..."
 if [ "$REUSE_CAMERA" = "1" ] && camera_process_alive; then
     log "检测到已有相机进程，快速检查是否可复用..."
     if mjpeg_frame_ready 1 || camera_frame_ready "$CAMERA_REUSE_PROBE_TIMEOUT"; then
@@ -398,6 +393,9 @@ pkill -f rosbridge_bson_tcp.py 2>/dev/null || true
 pkill -f rosbridge_tcp        2>/dev/null || true
 pkill -f rosbridge_websocket  2>/dev/null || true
 pkill -f u2r_r2u_bridge.py    2>/dev/null || true
+if [ "${CHASSIS_START_MODE:-skip}" = "local_command" ]; then
+    stop_chassis_processes
+fi
 if [ "$CAMERA_REUSE_READY" = "1" ]; then
     log "保留已运行的 ${CAMERA_DRIVER_LABEL}，跳过相机重启"
 else
@@ -417,10 +415,10 @@ srun fuser -k "${RTSP_PORT}/udp"
 srun fuser -k "${HLS_PORT}/tcp"
 sleep 1
 
-# ── 2. 检查小车连接 ──────────────────────────────────────────
-check_chassis_network
+# ── 2. 检查新底盘连接 ────────────────────────────────────────
+check_chassis_prereqs
 
-# ── 3. 启动小车底盘节点（远程）───────────────────────────────
+# ── 3. 启动新底盘驱动 ────────────────────────────────────────
 start_chassis
 
 # ── 4. 验证 ROS2 话题 ────────────────────────────────────────
@@ -567,8 +565,12 @@ nohup env \
     PYTHONUNBUFFERED=1 \
     UE_PUBLISH_RATE="${UE_PUBLISH_RATE:-1.0}" \
     RTK_RX_LOG_RATE="${RTK_RX_LOG_RATE:-0}" \
+    IMU_TOPIC="${IMU_TOPIC:-/imu}" \
+    ODOM_TOPIC="${ODOM_TOPIC:-/odom}" \
     python3 "$SRC_DIR/rtk_tools/u2r_r2u_bridge.py" \
     --fix-in "${FIX_TOPIC}" \
+    --imu-in "${IMU_TOPIC:-/imu}" \
+    --odom-in "${ODOM_TOPIC:-/odom}" \
     --pos-out "${RTK_POS_TOPIC}" \
     --cmd-in "${UE_COMMAND_TOPIC}" \
     --text-out "${RTK_TEXT_TOPIC}" \

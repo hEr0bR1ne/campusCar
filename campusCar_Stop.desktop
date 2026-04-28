@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=campusCar - 停止全栈
-Comment=停止所有小车服务
-Exec=gnome-terminal -- bash -lc "bash '$HOME/campusCar/scripts/stop_all.sh'; echo; read -p 'Press Enter to close...'"
+Name=campusCar - 新底盘停止全栈
+Comment=停止 STM32 新底盘所有服务
+Exec=gnome-terminal -- bash -lc "cd /home/hkust-gz-nuc/campusCar-new-chassis && ./scripts/stop_all.sh --profile stm32_hoverboard_4wd; echo; read -p 'Press Enter to close...'"
 Icon=process-stop
 Terminal=false
 Categories=Utility;

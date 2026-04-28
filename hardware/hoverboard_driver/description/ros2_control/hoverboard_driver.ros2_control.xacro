@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Single axle macro: used for both front and rear boards -->
+  <xacro:macro name="hoverboard_axle_ros2_control" params="name prefix device
+               wheel_radius:=0.0825 max_velocity:=1.0
+               command_limit_rpm:=50
+               feedback_format:=compact
+               imu_enabled:=false imu0_frame_id:=imu0_link imu1_frame_id:=imu1_link">
+
+    <ros2_control name="${name}" type="system">
+      <hardware>
+        <plugin>hoverboard_driver/hoverboard_driver</plugin>
+        <param name="wheel_radius">${wheel_radius}</param>
+        <param name="max_velocity">${max_velocity}</param>
+        <param name="device">${device}</param>
+        <param name="command_limit_rpm">${command_limit_rpm}</param>
+        <param name="feedback_format">${feedback_format}</param>
+        <param name="imu_enabled">${imu_enabled}</param>
+        <param name="imu0_frame_id">${imu0_frame_id}</param>
+        <param name="imu1_frame_id">${imu1_frame_id}</param>
+      </hardware>
+      <joint name="${prefix}left_wheel_joint">
+        <command_interface name="velocity"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="${prefix}right_wheel_joint">
+        <command_interface name="velocity"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+
+  </xacro:macro>
+
+  <!-- Four-wheel drive macro: front board + rear board -->
+  <xacro:macro name="hoverboard_driver_ros2_control" params="name prefix
+               front_device:=/dev/ttyUSB0 rear_device:=/dev/ttyUSB1
+               wheel_radius:=0.0825 max_velocity:=1.0 command_limit_rpm:=50
+               feedback_format:=compact">
+
+    <xacro:hoverboard_axle_ros2_control
+      name="${name}_front"
+      prefix="${prefix}front_"
+      device="${front_device}"
+      wheel_radius="${wheel_radius}"
+      max_velocity="${max_velocity}"
+      command_limit_rpm="${command_limit_rpm}"
+      feedback_format="${feedback_format}" />
+
+    <xacro:hoverboard_axle_ros2_control
+      name="${name}_rear"
+      prefix="${prefix}rear_"
+      device="${rear_device}"
+      wheel_radius="${wheel_radius}"
+      max_velocity="${max_velocity}"
+      command_limit_rpm="${command_limit_rpm}"
+      feedback_format="${feedback_format}" />
+
+  </xacro:macro>
+
+</robot>

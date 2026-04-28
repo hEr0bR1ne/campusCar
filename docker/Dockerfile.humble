@@ -1,0 +1,139 @@
+ARG BASE_IMAGE=ros:humble-ros-base-jammy
+FROM ${BASE_IMAGE}
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG ROS_DISTRO=humble
+ARG USERNAME=campuscar
+ARG USER_UID=1000
+ARG USER_GID=1000
+ARG MEDIAMTX_VERSION=v1.9.0
+ARG INSTALL_MEDIAMTX=1
+
+ENV ROS_DISTRO=${ROS_DISTRO}
+ENV CAMPUSCAR_ROOT=/workspace/campusCar-new-chassis
+ENV PYTHONUNBUFFERED=1
+ENV QT_X11_NO_MITSHM=1
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    aravis-tools \
+    aravis-tools-cli \
+    bash-completion \
+    build-essential \
+    ca-certificates \
+    cmake \
+    curl \
+    ffmpeg \
+    git \
+    iproute2 \
+    less \
+    libaravis-0.8-0 \
+    libdw-dev \
+    libeigen3-dev \
+    libgflags-dev \
+    libgl1 \
+    libgoogle-glog-dev \
+    libopencv-dev \
+    libssl-dev \
+    libyaml-cpp-dev \
+    lsof \
+    mesa-utils \
+    nano \
+    net-tools \
+    nlohmann-json3-dev \
+    openssh-client \
+    pkg-config \
+    procps \
+    psmisc \
+    python3-argcomplete \
+    python3-colcon-common-extensions \
+    python3-numpy \
+    python3-opencv \
+    python3-pil \
+    python3-pil.imagetk \
+    python3-pip \
+    python3-pynput \
+    python3-rosdep \
+    python3-tk \
+    python3-venv \
+    sudo \
+    sshpass \
+    udev \
+    usbutils \
+    v4l-utils \
+    ros-${ROS_DISTRO}-ament-lint-auto \
+    ros-${ROS_DISTRO}-ament-lint-common \
+    ros-${ROS_DISTRO}-backward-ros \
+    ros-${ROS_DISTRO}-camera-aravis2 \
+    ros-${ROS_DISTRO}-camera-calibration-parsers \
+    ros-${ROS_DISTRO}-camera-info-manager \
+    ros-${ROS_DISTRO}-control-toolbox \
+    ros-${ROS_DISTRO}-controller-manager \
+    ros-${ROS_DISTRO}-compressed-image-transport \
+    ros-${ROS_DISTRO}-cv-bridge \
+    ros-${ROS_DISTRO}-diagnostic-msgs \
+    ros-${ROS_DISTRO}-diagnostic-updater \
+    ros-${ROS_DISTRO}-diff-drive-controller \
+    ros-${ROS_DISTRO}-hardware-interface \
+    ros-${ROS_DISTRO}-image-publisher \
+    ros-${ROS_DISTRO}-image-transport \
+    ros-${ROS_DISTRO}-image-transport-plugins \
+    ros-${ROS_DISTRO}-joint-state-broadcaster \
+    ros-${ROS_DISTRO}-nmea-navsat-driver \
+    ros-${ROS_DISTRO}-rclcpp-components \
+    ros-${ROS_DISTRO}-realtime-tools \
+    ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
+    ros-${ROS_DISTRO}-robot-state-publisher \
+    ros-${ROS_DISTRO}-ros2-control \
+    ros-${ROS_DISTRO}-ros2-controllers \
+    ros-${ROS_DISTRO}-ros2controlcli \
+    ros-${ROS_DISTRO}-rosbridge-suite \
+    ros-${ROS_DISTRO}-statistics-msgs \
+    ros-${ROS_DISTRO}-tf2-msgs \
+    ros-${ROS_DISTRO}-tf2-ros \
+    ros-${ROS_DISTRO}-tf2-sensor-msgs \
+    ros-${ROS_DISTRO}-xacro \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN if [[ "${INSTALL_MEDIAMTX}" == "1" ]]; then \
+      set -eux; \
+      arch="$(dpkg --print-architecture)"; \
+      case "${arch}" in \
+        amd64) asset_arch="amd64" ;; \
+        arm64) asset_arch="arm64" ;; \
+        armhf) asset_arch="armv7" ;; \
+        *) echo "Unsupported mediamtx architecture: ${arch}"; exit 0 ;; \
+      esac; \
+      tmpdir="$(mktemp -d)"; \
+      curl -fL "https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/mediamtx_${MEDIAMTX_VERSION}_linux_${asset_arch}.tar.gz" \
+        -o "${tmpdir}/mediamtx.tar.gz"; \
+      tar -xzf "${tmpdir}/mediamtx.tar.gz" -C "${tmpdir}" mediamtx; \
+      install -m 0755 "${tmpdir}/mediamtx" /usr/local/bin/mediamtx; \
+      rm -rf "${tmpdir}"; \
+    fi
+
+RUN rosdep init 2>/dev/null || true
+
+RUN set -eux; \
+    if getent group "${USER_GID}" >/dev/null; then \
+      group_name="$(getent group "${USER_GID}" | cut -d: -f1)"; \
+    else \
+      groupadd --gid "${USER_GID}" "${USERNAME}"; \
+      group_name="${USERNAME}"; \
+    fi; \
+    useradd --uid "${USER_UID}" --gid "${group_name}" --create-home --shell /bin/bash "${USERNAME}"; \
+    usermod -aG sudo,dialout,video,plugdev "${USERNAME}"; \
+    echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-campuscar; \
+    chmod 0440 /etc/sudoers.d/90-campuscar; \
+    mkdir -p /workspace/campusCar-new-chassis; \
+    chown -R "${USER_UID}:${USER_GID}" /workspace
+
+COPY docker/entrypoint.sh /usr/local/bin/campuscar-entrypoint
+RUN chmod 0755 /usr/local/bin/campuscar-entrypoint
+
+USER ${USERNAME}
+WORKDIR /workspace/campusCar-new-chassis
+
+ENTRYPOINT ["/usr/local/bin/campuscar-entrypoint"]
+CMD ["bash"]

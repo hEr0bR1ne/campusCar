@@ -19,7 +19,7 @@ fi
 echo "========================================"
 echo "  Hikrobot GigE camera probe"
 echo "========================================"
-echo "ROBOT_PROFILE=${ROBOT_PROFILE:-campus_car}"
+echo "ROBOT_PROFILE=${ROBOT_PROFILE:-stm32_hoverboard_4wd}"
 echo "CAMERA_ADAPTER=${CAMERA_ADAPTER:-none}"
 echo "CAMERA_START_MODE=${CAMERA_START_MODE:-skip}"
 echo "HIKROBOT_CAMERA_GUID=${HIKROBOT_CAMERA_GUID:-<auto>}"
@@ -57,4 +57,4 @@ fi
 
 echo ""
 echo "下一步：如果上面能看到相机 GUID 或 IP，可运行："
-echo "HIKROBOT_CAMERA_GUID=<GUID或IP> ./scripts/launch_all.sh --profile hikrobot_gige"
+echo "HIKROBOT_CAMERA_GUID=<GUID或IP> ./scripts/launch_all.sh"

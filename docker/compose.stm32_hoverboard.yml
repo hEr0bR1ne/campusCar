@@ -1,0 +1,25 @@
+services:
+  campuscar-stm32-hoverboard:
+    image: ${CAMPUSCAR_DOCKER_IMAGE:-campuscar:humble}
+    container_name: campuscar-stm32-hoverboard
+    network_mode: host
+    ipc: host
+    privileged: true
+    working_dir: /workspace/campusCar-new-chassis
+    stdin_open: true
+    tty: true
+    environment:
+      ROBOT_PROFILE: stm32_hoverboard_4wd
+      CAMPUSCAR_CHASSIS_ISOLATION: stm32_hoverboard
+      CAMPUSCAR_ROOT: /workspace/campusCar-new-chassis
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+      DISPLAY: ${DISPLAY:-}
+      QT_X11_NO_MITSHM: "1"
+      HOVERBOARD_FRONT_DEVICE: ${HOVERBOARD_FRONT_DEVICE:-/dev/ttyUSB0}
+      HOVERBOARD_REAR_DEVICE: ${HOVERBOARD_REAR_DEVICE:-/dev/ttyUSB1}
+    volumes:
+      - ..:/workspace/campusCar-new-chassis
+      - /dev:/dev
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    command: bash

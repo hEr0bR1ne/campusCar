@@ -1,10 +1,16 @@
 # CLAUDE.md
 
+This repository is the canonical new STM32 chassis workspace at `~/campusCar-new-chassis`. Do not route new-chassis work back through `~/campusCar`.
+
 This repository uses shared project memory files. Load them before substantive work:
 
 @.codex-memory/project-overview.md
 @.codex-memory/current-context.md
 @.codex-memory/session-log.md
+
+For chassis-specific work, also load the new chassis memory. This branch is new direct-UART chassis only:
+
+@.codex-memory/systems/new-chassis.md
 
 ## Working Rules
 
