@@ -41,11 +41,21 @@
 
 ## 2026-04-28
 
-- User clarified that the adaptive refactor target is two additional cars with different chassis and cameras.
+- User clarified that the adaptive refactor target is two additional cars with different chassis and cameras, not the 2026-04-27 UE/RTK startup robustness work.
+- Current known direction: use a multi-car profile mechanism so chassis network/start/control assumptions and camera launch/topic/streaming assumptions are not hardcoded for only the current car.
 - User clarified that the new chassis path is direct NUC-to-chassis, not NUC-to-Orange-Pi-to-chassis, and that the direct chassis is STM32-based UART control.
 - Inspected seller package `_forks/hoverboard-driver-humble.zip`: it is a ROS2 Humble `hoverboard_driver` package using `ros2_control`, `diff_drive_controller`, and a UART hoverboard protocol (`0xABCD` command frame with steer/speed/checksum). It does not contain camera support or STM32 firmware.
+- Verified the current NUC ROS environment does not have the required `ros2_control` runtime packages installed (`controller_manager`, `diff_drive_controller`, `joint_state_broadcaster`, and `ros2_control` missing).
 - User clarified that `_forks/campusCar-hardware-reuse` is the package that should eventually be installed/flashed onto other robot cars for hardware reuse/migration.
 - User selected Hikrobot/Hikvision industrial camera `MV-CS016-10GC`; vendor/customer service provided no ROS materials.
 - Researched camera route: `MV-CS016-10GC` is a color GigE Vision/GenICam camera. For ROS2 Humble, prefer `camera_aravis2` first; use Hikrobot MVS SDK wrapper only if Aravis fails.
 - Added staged Hikrobot GigE camera support on the hardware refactor branch: `config/profiles/hikrobot_gige.env`, `scripts/hikrobot_camera_start.sh`, `scripts/hikrobot_camera_probe.sh`, common `HIKROBOT_*` env vars, Aravis dependency checks, and docs.
 - Installed local Hikrobot/Aravis runtime packages (`ros-humble-camera-aravis2`, `ros-humble-camera-aravis2-msgs`, `aravis-tools`, `aravis-tools-cli`, `libaravis-0.8-0`). Probe script passes dependency checks and reports no camera connected.
+- Added shared `src/motion_profile.py` so pure yaw commands are reshaped for the current 4WD base: `a/d`, left/right arrows, GUI `A/D`, terminal keyboard control, and UE `TurnLeft`/`TurnRight` keep `angular.z` but add opposite-signed `linear.x` assist for four-wheel pivot behavior.
+- Added `PIVOT_TURN_LINEAR_SCALE`, `PIVOT_TURN_MIN_LINEAR`, and `PIVOT_TURN_MAX_LINEAR` to `config/robot.env`; default `0.5 rad/s` pure left turn reshapes from `(0.0, 0.5)` to `(-0.15, 0.5)`, while travelling turns such as `(0.3, 0.5)` are unchanged.
+- Added `CAR_BASE_TYPE=4WD` and changed `CAR_LAUNCH_CMD` to export `BASE_TYPE=${CAR_BASE_TYPE}` before launching `base_control_ros2`, because remote logs showed the chassis self-reporting `Type:4WD` while non-interactive SSH startup missed `.bashrc`'s `BASE_TYPE`.
+- User clarified that the desired behavior is a true tank turn: left-side and right-side wheels should have opposite speeds. Replaced the earlier compensation profile with equal-magnitude opposite-side encoding: default pure left turn now reshapes from `(0.0, 0.5)` to `(-0.5, 0.5)`, while travelling turns remain unchanged.
+- Renamed the pivot tuning knobs to `TANK_TURN_SIDE_SPEED_SCALE`, `TANK_TURN_MIN_SIDE_SPEED`, and `TANK_TURN_MAX_SIDE_SPEED`; legacy `PIVOT_TURN_*` names are still read as fallbacks by `src/motion_profile.py`.
+- User reported the equal-opposite X/Z profile produced an excessive turning radius, which means the current base firmware still interprets `linear.x` as translational velocity rather than a left/right side-speed slot. Changed the safe default to `TANK_TURN_MODE=angular`, so pure `a/d` again publishes `(0.0, angular)` with no injected linear component.
+- Kept `experimental_xz` mode in `src/motion_profile.py` for controlled future tests only; true tank-turn behavior likely needs a lower-level driver/firmware path that exposes left/right wheel speed instead of trying to encode it through standard `/cmd_vel`.
+- Merged `origin/main` into `codex/hardware-adapter-refactor`; resolved conflicts by keeping the hardware profile design and preserving main's movement-control and shutdown checkpoint context.

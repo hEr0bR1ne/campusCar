@@ -21,6 +21,7 @@ echo "  Hikrobot GigE camera probe"
 echo "========================================"
 echo "ROBOT_PROFILE=${ROBOT_PROFILE:-campus_car}"
 echo "CAMERA_ADAPTER=${CAMERA_ADAPTER:-none}"
+echo "CAMERA_START_MODE=${CAMERA_START_MODE:-skip}"
 echo "HIKROBOT_CAMERA_GUID=${HIKROBOT_CAMERA_GUID:-<auto>}"
 echo ""
 
