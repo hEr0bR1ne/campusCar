@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=campusCar - 网页控制台
+Comment=打开旧底盘网页控制台
+Exec=xdg-open http://127.0.0.1:8088/
+Icon=web-browser
+Terminal=false
+Categories=Utility;

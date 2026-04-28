@@ -31,6 +31,7 @@ pkill -f "[c]amera_driver_gv"  2>/dev/null && echo "✅ Hikrobot/Aravis 相机�
 
 echo ""
 echo "[3/3] 停止控制相关进程..."
+pkill -f "car_web_gui.py"      2>/dev/null && echo "✅ car_web_gui 已停止" || true
 pkill -f "car_gui.py"          2>/dev/null && echo "✅ car_gui 已停止" || true
 pkill -f "ue_bridge.py"        2>/dev/null && echo "✅ ue_bridge 已停止" || true
 pkill -f "keyboard_control.py" 2>/dev/null && echo "✅ keyboard_control 已停止" || true

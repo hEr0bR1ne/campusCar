@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # 小车全栈一键启动
-# 包含：ROS2环境 / 相机 / MJPEG推流 / RTK全栈 / 控制GUI
+# 包含：ROS2环境 / 相机 / MJPEG推流 / RTK全栈 / 网页控制台
 # ============================================================
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,9 +30,13 @@ CAMERA_INFO_TOPIC="${CAMERA_INFO_TOPIC:-${IMAGE_TOPIC%/*}/camera_info}"
 HIKROBOT_CAMERA_NODE="${HIKROBOT_CAMERA_NODE:-hikrobot_camera}"
 HIKROBOT_ARAVIS_PARAMS_FILE="${HIKROBOT_ARAVIS_PARAMS_FILE:-${LOGDIR}/hikrobot_aravis_params.yaml}"
 START_GUI_EARLY="${START_GUI_EARLY:-1}"
+START_WEB_GUI="${START_WEB_GUI:-1}"
+START_CONTROL_GUI="${START_CONTROL_GUI:-0}"
+WEB_GUI_PORT="${WEB_GUI_PORT:-8088}"
 REFRESH_ROS_DAEMON="${REFRESH_ROS_DAEMON:-0}"
 LIVE_LOG_PIDS=()
 GUI_STARTED=0
+WEB_GUI_STARTED=0
 CAMERA_REUSE_READY=0
 ORBBEC_LAUNCH_ARGS=(
     "enable_depth:=${ORBBEC_ENABLE_DEPTH:-false}"
@@ -315,7 +319,7 @@ stop_live_logs() {
     done
 }
 start_control_gui() {
-    [ "${START_CONTROL_GUI:-1}" = "1" ] || return 0
+    [ "$START_CONTROL_GUI" = "1" ] || return 0
     if [ "$GUI_STARTED" = "1" ]; then
         return 0
     fi
@@ -332,6 +336,31 @@ start_control_gui() {
         python3 "$SRC_DIR/car_gui.py" \
         > "$LOGDIR/car_gui.log" 2>&1 &
     GUI_STARTED=1
+}
+start_web_gui() {
+    [ "$START_WEB_GUI" = "1" ] || return 0
+    if [ "$WEB_GUI_STARTED" = "1" ]; then
+        return 0
+    fi
+    if pgrep -f "$SRC_DIR/car_web_gui.py" >/dev/null 2>&1; then
+        WEB_GUI_STARTED=1
+        ok "网页控制台已运行"
+        return 0
+    fi
+
+    log "启动网页控制台 (${WEB_GUI_PORT})..."
+    nohup setsid env \
+        WEB_GUI_PORT="${WEB_GUI_PORT}" \
+        MJPEG_STREAM_URL="${MJPEG_STREAM_URL:-http://127.0.0.1:${MJPEG_PORT}/stream}" \
+        python3 "$SRC_DIR/car_web_gui.py" --port "${WEB_GUI_PORT}" \
+        > "$LOGDIR/web_gui.log" 2>&1 &
+    sleep 1
+    if ss -tln 2>/dev/null | grep -q ":${WEB_GUI_PORT}"; then
+        ok "网页控制台 → http://${UE_IP:-127.0.0.1}:${WEB_GUI_PORT}/"
+    else
+        warn "网页控制台未监听，检查 $LOGDIR/web_gui.log"
+    fi
+    WEB_GUI_STARTED=1
 }
 trap stop_live_logs EXIT
 trap 'stop_live_logs; exit 130' INT
@@ -378,11 +407,13 @@ pkill -f mjpeg_server         2>/dev/null || true
 pkill -f rtsp_server          2>/dev/null || true
 pkill -f mediamtx             2>/dev/null || true
 pkill -f "rtsp://127.0.0.1:8554/robot_cam" 2>/dev/null || true
+pkill -f car_web_gui.py       2>/dev/null || true
 pkill -f car_gui              2>/dev/null || true
 pkill -f ue_bridge            2>/dev/null || true
 pkill -f keyboard_control.py  2>/dev/null || true
 srun fuser -k 9090/tcp
 srun fuser -k 8080/tcp
+srun fuser -k "${WEB_GUI_PORT}/tcp"
 srun fuser -k 8554/tcp
 srun fuser -k 8554/udp
 srun fuser -k 8888/tcp
@@ -480,6 +511,7 @@ else
 fi
 
 if [ "$START_GUI_EARLY" = "1" ]; then
+    start_web_gui
     start_control_gui
 fi
 
@@ -614,11 +646,13 @@ else
 fi
 
 # ── 10. 启动控制 GUI ─────────────────────────────────────────
+start_web_gui
 start_control_gui
 
 echo ""
 echo "========================================"
 echo "  全栈启动完成"
+echo "  网页控制: http://${UE_IP:-127.0.0.1}:${WEB_GUI_PORT}/"
 echo "  GPS/UE5:  ${UE_IP:-127.0.0.1}:${ROSBRIDGE_PORT}"
 echo "  视频流:   rtsp://${UE_IP:-127.0.0.1}:${RTSP_PORT}/robot_cam"
 echo "  UE(HLS):  http://${UE_IP:-127.0.0.1}:${HLS_PORT}${HLS_URL_PATH}"

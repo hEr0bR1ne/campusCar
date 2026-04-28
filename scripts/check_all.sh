@@ -124,6 +124,17 @@ else
 fi
 pgrep -a -f "mjpeg_server" | head -1 && echo "✅ mjpeg_server" || echo "❌ mjpeg_server 未运行"
 
+# 6.5 网页控制台
+echo ""
+echo "【网页控制台】"
+if ss -tlnp 2>/dev/null | grep -q ":${WEB_GUI_PORT:-8088}"; then
+    echo "✅ 端口 ${WEB_GUI_PORT:-8088} 监听中"
+    [ -n "$UE_IP" ] && echo "   控制台地址: http://$UE_IP:${WEB_GUI_PORT:-8088}/"
+else
+    echo "❌ 端口 ${WEB_GUI_PORT:-8088} 未监听"
+fi
+pgrep -a -f "car_web_gui.py" | head -1 && echo "✅ car_web_gui" || echo "❌ car_web_gui 未运行"
+
 # 7. RTK 进程
 echo ""
 echo "【RTK 进程】"
@@ -135,6 +146,7 @@ pgrep -f "u2r_r2u_bridge" > /dev/null && echo "✅ u2r_r2u_bridge" || echo "❌ 
 # 8. 控制进程
 echo ""
 echo "【控制进程】"
+pgrep -a -f "car_web_gui.py" | head -1 && echo "✅ car_web_gui" || echo "❌ car_web_gui 未运行"
 pgrep -a -f "ue_bridge.py" | head -1 && echo "✅ ue_bridge" || echo "❌ ue_bridge 未运行"
 pgrep -a -f "keyboard_control.py" | head -1 && echo "✅ keyboard_control" || echo "ℹ️ keyboard_control 未运行（按需启动）"
 

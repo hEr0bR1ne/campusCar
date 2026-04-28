@@ -22,13 +22,18 @@
 
 ## Current Open Focus
 
-- Field-test restart checkpoint for 2026-04-28:
+- Field-test restart checkpoint for 2026-04-29:
   - Old chassis work is intentionally isolated in `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`.
-  - This branch was pushed to `origin/hardware/old-orange-pi-orbbec`; use `git pull --ff-only` after reboot if needed.
-  - Desktop entries for the old chassis are `/home/hkust-gz-nuc/桌面/campusCar_Start.desktop` and `/home/hkust-gz-nuc/桌面/campusCar_Control.desktop`; both point to `/home/hkust-gz-nuc/campusCar-old-chassis`.
+  - The 2026-04-29 save point should include the browser console/autostart work and the UE-link status simplification; check `git log -1 --oneline` after reboot for the latest commit.
+  - Desktop entries for the old chassis are `/home/hkust-gz-nuc/桌面/campusCar_Start.desktop`, `/home/hkust-gz-nuc/桌面/campusCar_Control.desktop`, and `/home/hkust-gz-nuc/桌面/campusCar_Web.desktop`; all point to `/home/hkust-gz-nuc/campusCar-old-chassis` or the local web console.
   - If working from terminal after reboot: `cd ~/campusCar-old-chassis && ./scripts/launch_all.sh`.
+  - Full-stack startup now defaults to the browser console at `http://<NUC_IP>:8088/` via `src/car_web_gui.py`; the current observed NUC URL on 2026-04-29 is `http://10.12.171.184:8088/`, but this IP may change with Wi-Fi/network.
+  - The old Tk GUI remains available with `START_CONTROL_GUI=1 ./scripts/launch_all.sh` or `./scripts/open_car_gui.sh`.
+  - Both the browser console and Tk GUI show explicit UE link status rows for `/U2RTopic_Command`, `/R2UTopic_Pos`, and `/R2UTopic_Text` instead of generic ROS topic lists.
+  - Boot autostart is managed by the user systemd unit `campuscar-old-chassis.service`, installed/enabled by `./scripts/install_autostart_service.sh`; it starts `LIVE_RTK_LOGS=0 START_WEB_GUI=1 START_CONTROL_GUI=0 ./scripts/launch_all.sh`.
+  - Check autostart after reboot with `systemctl --user status campuscar-old-chassis.service --no-pager`; disable only if needed with `./scripts/install_autostart_service.sh --disable`.
   - Quick health check: `cd ~/campusCar-old-chassis && ./scripts/check_all.sh`.
-  - Useful logs during field testing: `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, `data/logs/ue_bridge.log`, `data/logs/camera.log`, and `data/logs/mediamtx.log`.
+  - Useful logs during field testing: `data/logs/web_gui.log`, `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, `data/logs/ue_bridge.log`, `data/logs/camera.log`, and `data/logs/mediamtx.log`.
   - This is the Orange Pi / Orbbec old-bottom-board car. Do not switch it to `stm32_hoverboard_4wd`; that profile belongs to `/home/hkust-gz-nuc/campusCar-new-chassis`.
 
 - Current operational workspace for the old Orange Pi/Orbbec chassis is `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`; repo desktop launchers and checked docs point here for the old chassis. Do not use the STM32 `stm32_hoverboard_4wd` profile for this car.

@@ -10,6 +10,8 @@
 - Full stack start: `./scripts/launch_all.sh`
 - Full stack stop: `./scripts/stop_all.sh`
 - Health check: `./scripts/check_all.sh`
+- Web control console: `./scripts/open_web_gui.sh`
+- Boot autostart setup/status: `./scripts/install_autostart_service.sh`
 - Keyboard control: `./scripts/keyboard_control.sh`
 - Dependency deployment: `./scripts/deploy_dependencies.sh`
 
@@ -25,6 +27,7 @@
 ## Main Components
 
 - `src/car_gui.py`: control GUI
+- `src/car_web_gui.py`: browser-based control console on `8088`
 - `src/keyboard_control.py`: direct keyboard control
 - `src/rtsp_server.py`: RTSP video pipeline
 - `src/mjpeg_server.py`: MJPEG preview service
@@ -43,6 +46,7 @@
 - `8554/tcp`: RTSP via `mediamtx`
 - `8888/tcp`: HLS via `mediamtx`
 - `8080/tcp`: MJPEG HTTP preview
+- `8088/tcp`: browser control console
 - `9090/tcp`: rosbridge TCP / WebSocket integration point
 
 ## ROS2 Topics
@@ -65,6 +69,8 @@
 ## Operational Notes
 
 - `launch_all.sh` is the normal startup path and handles cleanup, connectivity checks, remote chassis startup, camera, RTK, streaming, UE bridge, and GUI startup.
+- Full-stack startup defaults to the browser console (`src/car_web_gui.py`) and does not pop the Tk GUI unless `START_CONTROL_GUI=1`.
+- Boot autostart is a user systemd unit named `campuscar-old-chassis.service`; it starts `LIVE_RTK_LOGS=0 START_WEB_GUI=1 START_CONTROL_GUI=0 ./scripts/launch_all.sh`.
 - RTK serial absence should not block the rest of the stack; startup is designed to skip RTK-specific steps when unavailable.
 - Logs are documented under `data/logs/` with per-service log files such as `camera.log`, `rosbridge.log`, `ue_bridge.log`, and `mediamtx.log`.
 

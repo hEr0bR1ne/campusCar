@@ -13,6 +13,7 @@
 | UE Electra Player | `http://192.168.100.1:8888/robot_cam/index.m3u8` |
 | 浏览器预览验证 | `http://192.168.100.1:8888/robot_cam/` |
 | MJPEG 备用预览 | `http://192.168.100.1:8080/` |
+| NUC 网页控制台 | `http://192.168.100.1:8088/` |
 
 ### 备用方式：RTSP（仅调试用）
 
@@ -151,4 +152,5 @@ UE_LOCAL_Y_SIGN=1
 | `8554/tcp` | RTSP（调试） |
 | `8888/tcp` | HLS（UE 接入） |
 | `8080/tcp` | MJPEG 预览（可选） |
+| `8088/tcp` | NUC 网页控制台（人工接管/状态） |
 | `9090/tcp` | rosbridge TCP/BSON（指令控制） |

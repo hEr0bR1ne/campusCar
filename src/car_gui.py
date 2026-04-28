@@ -144,15 +144,10 @@ SPEED_BINDINGS = {
     "g": (1.0, 0.9),
 }
 
-TOPICS_TO_MONITOR = [
-    (FIX_TOPIC, "RTK原始"),
-    (IMU_TOPIC, "底盘IMU"),
-    (ODOM_TOPIC, "里程计"),
-    (IMAGE_TOPIC, "相机图像"),
-    (RTK_POS_TOPIC, "UE坐标"),
-    (UE_COMMAND_TOPIC, "UE指令"),
-    (RTK_TEXT_TOPIC, "UE回复"),
-    (CMD_VEL_TOPIC, "底盘控制"),
+UE_TOPIC_STATUS_ITEMS = [
+    (UE_COMMAND_TOPIC, "指令入口", "command_in"),
+    (RTK_POS_TOPIC, "坐标发给UE", "position_out"),
+    (RTK_TEXT_TOPIC, "回复发给UE", "text_out"),
 ]
 
 # ── 颜色主题 ──────────────────────────────────────────────────────────────────
@@ -467,7 +462,7 @@ class CarNode(Node):
     def _refresh_runtime_status(self):
         now = time.time()
         topic_status = {}
-        for topic, _label in TOPICS_TO_MONITOR:
+        for topic, _label, _role in UE_TOPIC_STATUS_ITEMS:
             try:
                 topic_status[topic] = {
                     "publishers": self.count_publishers(topic),
@@ -709,11 +704,11 @@ class CarGUI:
         self.lbl_ue_activity = self._kv(conn_panel, "UE活跃", label_width=10)
         self.lbl_graph_time = self._kv(conn_panel, "刷新", label_width=10)
 
-        # ── 话题状态面板 ──────────────────────────────────────────────────────
-        topics_panel = self._card(right, "UE 相关话题", fill=tk.X, pady=(0, 5))
+        # ── UE 链路状态面板 ──────────────────────────────────────────────────
+        topics_panel = self._card(right, "UE 链路状态", fill=tk.X, pady=(0, 5))
         self.topic_labels = {}
-        for topic, label in TOPICS_TO_MONITOR:
-            self.topic_labels[topic] = self._kv(topics_panel, label, label_width=8)
+        for topic, label, _role in UE_TOPIC_STATUS_ITEMS:
+            self.topic_labels[topic] = self._kv(topics_panel, label, label_width=9)
 
         # ── 底盘状态面板 ──────────────────────────────────────────────────────
         vehicle_panel = self._card(right, "底盘状态", fill=tk.X, pady=(0, 5))
@@ -1249,6 +1244,34 @@ class CarGUI:
             fg=self._age_color(odom.get("time") if odom is not None else None, 1.5, 5.0),
         )
 
+    def _describe_ue_topic(self, role: str, pubs: int, subs: int, command_age):
+        if role == "command_in":
+            if subs <= 0:
+                return "本机未监听，UE 指令进不来", RED
+            if command_age is None:
+                return "本机监听中，等待 UE 发送", YELLOW
+            if command_age <= 2.0:
+                return f"刚收到 UE 指令 {command_age:.1f}s前", GREEN
+            if command_age <= 30.0:
+                return f"最近收到过，当前空闲 {command_age:.1f}s", YELLOW
+            return f"长时间未收到 UE 指令 {command_age:.1f}s", YELLOW
+
+        if role == "position_out":
+            if pubs <= 0:
+                return "坐标桥未发布，UE 收不到位置", RED
+            if subs <= 1:
+                return "坐标发布中，等待 UE 订阅", YELLOW
+            return "坐标发布中，已有外部订阅", GREEN
+
+        if role == "text_out":
+            if pubs <= 0:
+                return "回复节点未发布，UE 收不到文本", RED
+            if subs <= 0:
+                return "回复已准备，等待 UE 订阅", YELLOW
+            return "回复已准备，已有外部订阅", GREEN
+
+        return ("在线" if pubs or subs else "未发现"), (GREEN if pubs or subs else RED)
+
     def _update_ue_monitor(self):
         info = self.node.get_ue_monitor()
         pos = info["position"] if isinstance(info["position"], dict) else None
@@ -1280,27 +1303,16 @@ class CarGUI:
         )
 
         topic_status = info["topic_status"]
-        for topic, label_widget in self.topic_labels.items():
+        command_age = None if info["command_time"] is None else now - info["command_time"]
+        for topic, _label, role in UE_TOPIC_STATUS_ITEMS:
+            label_widget = self.topic_labels.get(topic)
+            if label_widget is None:
+                continue
             counts = topic_status.get(topic, {"publishers": 0, "subscribers": 0})
             pubs = counts.get("publishers", 0)
             subs = counts.get("subscribers", 0)
-            if topic == UE_COMMAND_TOPIC:
-                state = "等待UE发布" if pubs == 0 and info["command_time"] is None else "可接收"
-            elif topic == RTK_POS_TOPIC:
-                if pubs == 0:
-                    state = "等待坐标源"
-                elif subs <= 1:
-                    state = "输出中/等UE订阅"
-                else:
-                    state = "UE已订阅"
-            elif topic == RTK_TEXT_TOPIC:
-                state = "等待UE订阅" if subs == 0 else "UE已订阅"
-            else:
-                state = "在线" if pubs or subs else "未发现"
-            color = GREEN if pubs or subs else SUBTEXT
-            if topic == UE_COMMAND_TOPIC and info["command_time"] is not None:
-                color = self._age_color(info["command_time"], 2.0, 30.0)
-            label_widget.config(text=f"{topic}   pub:{pubs} sub:{subs}   {state}", fg=color)
+            state, color = self._describe_ue_topic(role, pubs, subs, command_age)
+            label_widget.config(text=f"{state}  {topic}  pub:{pubs} sub:{subs}", fg=color)
 
         if pos is None:
             self.lbl_ue_lat.config(text="等待 /R2UTopic_Pos", fg=SUBTEXT)
