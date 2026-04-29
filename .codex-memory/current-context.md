@@ -22,7 +22,48 @@
 
 ## Current Open Focus
 
+- **2026-04-29 收尾存档 — 明早调试入口**：
+  - 今天完成了 `src/ue_bridge.py` 运动控制双闭环改造，代码已提交并推送到 `hardware/old-orange-pi-orbbec`。
+  - 明早调试入口：`docs/速度闭环调试指南.md`，按步骤操作即可。
+  - 关键操作：先 `kill <ue_bridge PID>`，再前台 `python3 src/ue_bridge.py`，看到 `速度闭环：kp=0.8 ki=0.3` 说明新代码已加载。
+  - 调参入口：`config/robot.env` 里的 `UE_SPEED_KP`、`UE_SPEED_KI`、`UE_NAV_MIN_SPEED`、`UE_NAV_DECEL_DIST`，改完重启 `ue_bridge.py` 即生效。
+  - 速度环日志关键词：`[速度环]`（方向控制）、`[导航速度环]`（坐标导航）；没有这两行说明在走开环（`/odom` 缺失或超时，属正常退化）。
+
+- **ue_bridge.py 双闭环改造内容（2026-04-29）**：
+  - 新增 `/odom` 订阅，提取 `hypot(vx, vy)` 作为速度反馈，受 `_lock` 保护。
+  - 新增 `SpeedPI` 类：带积分限幅（`MAX_LINEAR_SPEED / ki`）的 PI 控制器，防止启动瞬间积分爆炸。
+  - 方向控制：解析可选 `duration` 字段，实际超时 = `min(duration, DIRECTION_TIMEOUT_SEC)`；前进/后退走速度闭环，纯转向跳过闭环。
+  - 坐标导航：外环线性减速曲线（`dist < NAV_DECEL_DIST` 时从目标速度降到 `NAV_MIN_SPEED`）+ 内环速度 PI；转向对准阶段重置积分。
+  - `/odom` 超时时两处均退化为开环并重置积分，fail-open 设计。
+  - 每 10 个控制周期打印一行调参日志，不影响正常运行。
+  - 新增 5 个 `config/robot.env` 配置项：`UE_SPEED_KP=0.8`、`UE_SPEED_KI=0.3`、`UE_SPEED_ODOM_TIMEOUT=1.0`、`UE_NAV_MIN_SPEED=0.08`、`UE_NAV_DECEL_DIST=1.5`。
+
+- **收尾流程定义（用户约定）**：
+  - 用户说"收尾"时，执行以下三步：
+    1. 写调试/操作文档到 `docs/` 目录（供明天继续工作用）
+    2. 更新 `.codex-memory/`（`current-context.md` 写当前状态和下一步，`session-log.md` 追加今日工作记录）；`.codex-memory/` 是所有 AI agent 共享的持久记忆层
+    3. `git add` 相关文件，`git commit`，`git push` 到 GitHub
+
 - Field-test restart checkpoint for 2026-04-29:
+  - Old chassis work is intentionally isolated in `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`.
+  - If working from terminal after reboot: `cd ~/campusCar-old-chassis && ./scripts/launch_all.sh`.
+  - Full-stack startup defaults to the browser console at `http://<NUC_IP>:8088/` via `src/car_web_gui.py`.
+  - Boot autostart is managed by the user systemd unit `campuscar-old-chassis.service`; check with `systemctl --user status campuscar-old-chassis.service --no-pager`.
+  - Quick health check: `cd ~/campusCar-old-chassis && ./scripts/check_all.sh`.
+  - Useful logs: `data/logs/ue_bridge.log`, `data/logs/web_gui.log`, `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, `data/logs/camera.log`.
+  - This is the Orange Pi / Orbbec old-bottom-board car. Do not switch it to `stm32_hoverboard_4wd`.
+
+- Current operational workspace for the old Orange Pi/Orbbec chassis is `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`.
+- The old-chassis GUI has IMU/odom integration and a compact right-side UE panel.
+- `src/car_gui.py` has a `设为正北` button; `src/rtk_tools/core/bridge.py` watches config file mtime for heading offset reload.
+- RTK position hold is enabled by default (`RTK_POSITION_HOLD_ENABLED=1`); GUI shows `坐标源` state.
+- `TANK_TURN_MODE=angular` is the safe default for 4WD turning.
+
+- Pending adaptive refactor (not started):
+  - Two new cars with STM32 direct-UART chassis and Hikrobot MV-CS016-10GC GigE camera.
+  - `camera_aravis2` is the preferred ROS2 route for the Hikrobot camera.
+  - `_forks/campusCar-hardware-reuse` is the key package for other-car deployment.
+  - Missing: exact STM32 UART protocol, serial device/baud, whether both new cars share the same camera profile.
   - Old chassis work is intentionally isolated in `/home/hkust-gz-nuc/campusCar-old-chassis` on branch `hardware/old-orange-pi-orbbec`.
   - The 2026-04-29 save point should include the browser console/autostart work and the UE-link status simplification; check `git log -1 --oneline` after reboot for the latest commit.
   - Desktop entries for the old chassis are `/home/hkust-gz-nuc/桌面/campusCar_Start.desktop`, `/home/hkust-gz-nuc/桌面/campusCar_Control.desktop`, and `/home/hkust-gz-nuc/桌面/campusCar_Web.desktop`; all point to `/home/hkust-gz-nuc/campusCar-old-chassis` or the local web console.
@@ -65,17 +106,6 @@
   - `scripts/hikrobot_camera_probe.sh` is the first test entry when the camera arrives; it checks `camera_aravis2`, `arv-tool-0.8`, Aravis enumeration, and ROS2 `camera_finder`.
   - Installed local runtime packages on 2026-04-28: `ros-humble-camera-aravis2`, `ros-humble-camera-aravis2-msgs`, `aravis-tools`, `aravis-tools-cli`, and `libaravis-0.8-0`. `apt-get update` showed a Google Chrome source timeout, but the ROS/Aravis packages installed successfully.
   - Remaining missing details: exact STM32 UART chassis protocol, serial device/baud confirmation, and whether both new cars use the same Hikrobot camera/profile.
-
-- Shutdown checkpoint for 2026-04-27:
-  - Current branch is `codex/full-stack-ue-rtk-gui`.
-  - Code version was pushed to GitHub; local HEAD and `origin/codex/full-stack-ue-rtk-gui` were aligned at `c46310d Normalize quoted UE command payloads` before this checkpoint edit.
-  - The latest working UE integration uses `src/rosbridge_bson_tcp.py` on TCP/BSON port `9090`, not the old rosbridge WebSocket launch.
-  - `/U2RTopic_Command` compatibility is in `src/rosbridge_bson_tcp.py`: UE command payloads sent as a BSON dict, as `{data: dict}`, or as an extra-quoted JSON string like `"{"commandId":...}"` are normalized into `std_msgs/String.data`.
-  - The successful end-to-end smoke test used a safe `Stop` command and produced `方向指令：Stop  停车` in `data/logs/ue_bridge.log`.
-  - Camera startup was optimized to reuse an already publishing Orbbec camera by default and the GUI now prefers local MJPEG frames for faster display.
-  - Known hardware note: current Orbbec connection showed `USB2.1` / 480M and cold camera initialization around 40 seconds; USB3 cabling/port is still the likely hardware fix.
-  - Next recommended step after reboot: run `cd ~/campusCar-old-chassis && ./scripts/launch_all.sh`, ask UE to resend the standard coordinate command, then watch `data/logs/rosbridge.log`, `data/logs/u2r_command.log`, and `data/logs/ue_bridge.log`.
-  - If UE still reaches the bridge but movement does not start, inspect RTK `/fix` and `/heading` readiness rather than JSON transport first.
 
 ## Update Trigger
 

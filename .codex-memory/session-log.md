@@ -80,3 +80,15 @@
 - User asked to save today's work, store memory for tomorrow debugging, and ensure full-stack startup is configured for boot autostart.
 - Refreshed `.codex-memory/project-overview.md` and `.codex-memory/current-context.md` so restart context points to the old-chassis web console (`http://<NUC_IP>:8088/`), the `campuscar-old-chassis.service` user systemd unit, and the UE-link status rows in both GUI surfaces.
 - Current runtime observed before saving: `8088`, `8080`, `9090`, `8554`, and `8888` were listening; web console process was running as `python3 src/car_web_gui.py --port 8088`; user service was already `enabled`, `inactive` until next boot/service start, with `Linger=yes`.
+- Implemented dual closed-loop motion control in `src/ue_bridge.py`:
+  - Added `/odom` subscription (`nav_msgs/Odometry`) with `qos_profile_sensor_data`; extracts `hypot(vx, vy)` as speed feedback, protected by `_lock`.
+  - Added `SpeedPI` class with anti-windup integral clamping (`MAX_LINEAR_SPEED / ki`).
+  - Direction control: added optional `duration` field parsing; effective timeout = `min(duration, DIRECTION_TIMEOUT_SEC)`; forward/backward use speed PI loop; pure turns bypass the loop.
+  - Navigation: outer loop uses linear deceleration curve (`NAV_MIN_SPEED` to `linear_spd` over `NAV_DECEL_DIST`); inner loop uses speed PI; both degrade gracefully to open-loop when `/odom` is stale.
+  - Tuning log lines printed every 10 control ticks: `[速度环]` for direction control, `[导航速度环]` for navigation.
+  - Added 5 new config entries to `config/robot.env`: `UE_SPEED_KP=0.8`, `UE_SPEED_KI=0.3`, `UE_SPEED_ODOM_TIMEOUT=1.0`, `UE_NAV_MIN_SPEED=0.08`, `UE_NAV_DECEL_DIST=1.5`.
+- Wrote `docs/速度闭环调试指南.md` as the step-by-step debugging guide for tomorrow morning.
+- Defined "收尾" (wrap-up) convention with user: write docs → update `.codex-memory/` → git commit + push.
+- Committed and pushed all changes to `hardware/old-orange-pi-orbbec` on GitHub.
+
+
