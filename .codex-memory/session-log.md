@@ -97,4 +97,18 @@
   - `scripts/launch_all.sh` and `scripts/check_all.sh` now display the active profile and chassis mode.
   - `launch_all.sh` protects against accidentally using the unfinished `direct_uart` new-chassis profile by exiting early instead of trying the old remote-SSH startup path.
 
+## 2026-04-30
+
+- Fixed Tk GUI not launching: explained that `START_CONTROL_GUI=0` is the default since web console was added; user can run `python3 src/car_gui.py` directly or use `START_CONTROL_GUI=1 ./scripts/launch_all.sh`.
+- Cleaned up remote branches: deleted `profile/old-orange-pi-orbbec`, `profile/new-stm32-hikrobot`, and `codex/hardware-adapter-refactor`.
+- Refactored `config/robot.env` into a pure skeleton on `main`: only path bootstrap, profile loader, ROS2 topic names, service ports, and universal params remain; all vehicle-specific content moved to `config/profiles/`.
+- Expanded `config/profiles/old-orange-pi-orbbec.env` with full old-chassis config (chassis network, speeds, heading offset, RTK hold, UE control, Orbbec camera, rosbridge paths).
+- Expanded `config/profiles/new-stm32-hikrobot.env` with full new-chassis config (serial params, Hikrobot camera params, same tuning defaults).
+- Rebased `hardware/old-orange-pi-orbbec` onto new `main`; restored field-calibrated `VEHICLE_HEADING_OFFSET_DEG=156.828` into profile; force-pushed to origin.
+- Discovered `~/campusCar-old-chassis/orbbec_ws` was a symlink pointing to `~/campusCar/orbbec_ws`; moved real directory into `campusCar-old-chassis` and deleted `~/campusCar`.
+- Fixed broken worktree git metadata (caused by deleting `~/campusCar` which was the main git repo): re-cloned to `~/campusCar-git-main`, rebuilt `campusCar-old-chassis` as a proper worktree, migrated orbbec_ws and logs.
+- Wrote `docs/2026-04-30-工作记录.md` with today's summary and tomorrow's checklist.
+- Updated `.codex-memory/` and pushed all changes to GitHub.
+
+
 

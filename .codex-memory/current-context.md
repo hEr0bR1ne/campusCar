@@ -22,6 +22,14 @@
 
 ## Current Open Focus
 
+- **2026-04-30 收尾存档**：
+  - main 骨架整理完成：`config/robot.env` 只含话题名/端口/profile 加载，车型特定内容全部在 `config/profiles/`
+  - `hardware/old-orange-pi-orbbec` 已 rebase 到新 main，校准值 `VEHICLE_HEADING_OFFSET_DEG=156.828` 已写入 profile
+  - 分支清理：删除 `profile/` 系列和 `codex/hardware-adapter-refactor`，只保留 `main` + `hardware/` 两套
+  - 目录修复：`orbbec_ws` 软链接改为真实目录，`~/campusCar` 旧 clone 已删除，worktree git 元数据已修复
+  - 本地目录结构：`~/campusCar-git-main`（主仓库 main）、`~/campusCar-old-chassis`（worktree hardware/old）、`~/campusCar-new-chassis`（新底盘独立仓库）
+  - 明日待做：速度闭环现场调参（见 `docs/速度闭环调试指南.md`）；`hardware/new-stm32-hikrobot` 尚未 rebase 到新 main
+
 - **2026-04-29 收尾存档 — 明早调试入口**：
   - 今天完成了 `src/ue_bridge.py` 运动控制双闭环改造，代码已提交并推送到 `hardware/old-orange-pi-orbbec`。
   - 明早调试入口：`docs/速度闭环调试指南.md`，按步骤操作即可。
