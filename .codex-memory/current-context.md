@@ -60,6 +60,14 @@
 - `TANK_TURN_MODE=angular` is the safe default for 4WD turning.
 
 - Pending adaptive refactor (not started):
+ - Multi-profile skeleton started on 2026-04-29:
+  - `config/robot.env` now supports `CAR_PROFILE` and auto-sources `config/profiles/<profile>.env`.
+  - Default profile remains `old-orange-pi-orbbec`; current old-chassis workflow should stay unchanged.
+  - Added `config/profiles/old-orange-pi-orbbec.env` and `config/profiles/new-stm32-hikrobot.env`.
+  - Added `CAR_CHASSIS_MODE` guard in `scripts/launch_all.sh` and `scripts/check_all.sh`: `remote_ssh` follows old flow; `direct_uart` currently stops with a clear protective message instead of incorrectly running the old SSH startup.
+  - Before this trial refactor, repository snapshot was saved as remote branch `backup/pre-multi-profile-20260429-1` and tag `snapshot/pre-multi-profile-20260429-1`.
+
+- Pending adaptive refactor (partially started):
   - Two new cars with STM32 direct-UART chassis and Hikrobot MV-CS016-10GC GigE camera.
   - `camera_aravis2` is the preferred ROS2 route for the Hikrobot camera.
   - `_forks/campusCar-hardware-reuse` is the key package for other-car deployment.

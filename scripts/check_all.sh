@@ -29,15 +29,29 @@ HLS_PREVIEW_PATH="/robot_cam/"
 echo "========================================"
 echo "  campusCar 全栈状态检查"
 echo "========================================"
+echo "Profile: ${CAR_PROFILE} (${CAR_PROFILE_NAME})"
+echo "底盘模式: ${CAR_CHASSIS_MODE}"
 
 # 1. 网络
 echo ""
 echo "【网络】"
-if ping -c 1 -W 2 "$CAR_IP" > /dev/null 2>&1; then
-    echo "✅ 小车 ($CAR_IP): ping OK"
-else
-    echo "❌ 小车 ($CAR_IP): 不可达"
-fi
+case "${CAR_CHASSIS_MODE}" in
+    remote_ssh)
+        if ping -c 1 -W 2 "$CAR_IP" > /dev/null 2>&1; then
+            echo "✅ 小车 ($CAR_IP): ping OK"
+        else
+            echo "❌ 小车 ($CAR_IP): 不可达"
+        fi
+        ;;
+    direct_uart)
+        echo "ℹ️ 当前 profile 为新底盘直连串口模式，不执行旧底盘网络 ping 检查"
+        [ -n "${CAR_SERIAL_PORT:-}" ] && echo "   串口设备: ${CAR_SERIAL_PORT}"
+        [ -n "${CAR_SERIAL_BAUD:-}" ] && echo "   串口波特率: ${CAR_SERIAL_BAUD}"
+        ;;
+    *)
+        echo "❌ 未知 CAR_CHASSIS_MODE=${CAR_CHASSIS_MODE}"
+        ;;
+esac
 
 # 2. ROS2 话题
 echo ""

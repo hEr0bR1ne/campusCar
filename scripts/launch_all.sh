@@ -380,9 +380,12 @@ need_cmd mediamtx
 echo "========================================"
 echo "       小车全栈启动"
 echo "========================================"
+echo "Profile: ${CAR_PROFILE} (${CAR_PROFILE_NAME})"
+echo "底盘模式: ${CAR_CHASSIS_MODE}"
 
 # ── 1. 杀掉旧进程 ────────────────────────────────────────────
 log "清理旧进程..."
+log "当前车型 Profile: ${CAR_PROFILE} (${CAR_PROFILE_NAME})"
 log "当前相机模式: $(camera_mode_label)"
 if [ "$REUSE_CAMERA" = "1" ] && camera_process_alive; then
     log "检测到已有相机进程，快速检查是否可复用..."
@@ -419,30 +422,42 @@ srun fuser -k 8554/udp
 srun fuser -k 8888/tcp
 sleep 1
 
-# ── 2. 检查小车连接 ──────────────────────────────────────────
-log "检查小车网络 ($CAR_IP)..."
-if ping -c 1 -W 3 "$CAR_IP" > /dev/null 2>&1; then
-    ok "小车网络正常"
-else
-    err "无法 ping 通小车，请检查交换机连接"
-    read -p "按 Enter 退出..."
-    exit 1
-fi
+# ── 2. 检查/启动底盘 ─────────────────────────────────────────
+case "${CAR_CHASSIS_MODE}" in
+    remote_ssh)
+        log "检查小车网络 ($CAR_IP)..."
+        if ping -c 1 -W 3 "$CAR_IP" > /dev/null 2>&1; then
+            ok "小车网络正常"
+        else
+            err "无法 ping 通小车，请检查交换机连接"
+            read -p "按 Enter 退出..."
+            exit 1
+        fi
 
-# ── 3. 启动小车底盘节点（远程）───────────────────────────────
-log "检查底盘节点..."
-if sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" \
-    "ros2 node list 2>/dev/null | grep -q base_control" 2>/dev/null; then
-    ok "底盘节点已运行"
-else
-    log "远程启动底盘节点..."
-    sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" \
-        "nohup bash -lc '${CAR_LAUNCH_CMD}' > ~/ros2_base_control.log 2>&1 &" 2>/dev/null
-    sleep 5
-    ok "底盘启动命令已发送"
-fi
+        log "检查底盘节点..."
+        if sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" \
+            "ros2 node list 2>/dev/null | grep -q base_control" 2>/dev/null; then
+            ok "底盘节点已运行"
+        else
+            log "远程启动底盘节点..."
+            sshpass -p "$CAR_PASS" ssh -o StrictHostKeyChecking=no "$CAR_USER@$CAR_IP" \
+                "nohup bash -lc '${CAR_LAUNCH_CMD}' > ~/ros2_base_control.log 2>&1 &" 2>/dev/null
+            sleep 5
+            ok "底盘启动命令已发送"
+        fi
+        ;;
+    direct_uart)
+        err "当前 Profile=${CAR_PROFILE} 使用 direct_uart 新底盘，但 launch_all.sh 还没有接入新底盘启动流程。"
+        err "本次为保护旧底盘流程，已停止启动；后续会把串口底盘驱动接到这个 profile。"
+        exit 1
+        ;;
+    *)
+        err "未知 CAR_CHASSIS_MODE=${CAR_CHASSIS_MODE}"
+        exit 1
+        ;;
+esac
 
-# ── 4. 验证 ROS2 话题 ────────────────────────────────────────
+# ── 3. 验证 ROS2 话题 ────────────────────────────────────────
 log "验证 ROS2 DDS..."
 if [ "$REFRESH_ROS_DAEMON" = "1" ]; then
     ros2 daemon stop > /dev/null 2>&1
@@ -456,14 +471,14 @@ else
     warn "/cmd_vel 未发现，底盘可能未就绪（继续启动其他服务）"
 fi
 
-# ── 5. 启动相机节点 ──────────────────────────────────────────
+# ── 4. 启动相机节点 ──────────────────────────────────────────
 if [ "$CAMERA_REUSE_READY" = "1" ]; then
     ok "复用已运行相机，跳过相机初始化"
 else
     start_camera_node
 fi
 
-# ── 6. 提前启动视频服务，让订阅端在相机出首帧前就挂好 ─────────────
+# ── 5. 提前启动视频服务，让订阅端在相机出首帧前就挂好 ─────────────
 if [ ! -f "$RTSP_CONFIG" ]; then
     err "RTSP 配置文件不存在: $RTSP_CONFIG"
     exit 1

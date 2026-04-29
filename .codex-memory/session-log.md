@@ -90,5 +90,11 @@
 - Wrote `docs/速度闭环调试指南.md` as the step-by-step debugging guide for tomorrow morning.
 - Defined "收尾" (wrap-up) convention with user: write docs → update `.codex-memory/` → git commit + push.
 - Committed and pushed all changes to `hardware/old-orange-pi-orbbec` on GitHub.
+- Created remote safety snapshot before starting the multi-profile trial refactor: branch `backup/pre-multi-profile-20260429-1` and tag `snapshot/pre-multi-profile-20260429-1` both point to `94077a6`.
+- Started a safe multi-profile skeleton for future old/new chassis coexistence:
+  - `config/robot.env` now supports `CAR_PROFILE` and loads `config/profiles/<profile>.env`.
+  - Added `config/profiles/old-orange-pi-orbbec.env` and `config/profiles/new-stm32-hikrobot.env`.
+  - `scripts/launch_all.sh` and `scripts/check_all.sh` now display the active profile and chassis mode.
+  - `launch_all.sh` protects against accidentally using the unfinished `direct_uart` new-chassis profile by exiting early instead of trying the old remote-SSH startup path.
 
 
