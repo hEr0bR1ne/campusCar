@@ -1,0 +1,43 @@
+# ============================================================
+# pointcloud_to_laserscan 参数
+# 将 Livox Mid360 的 PointCloud2 转换为标准 LaserScan
+# ============================================================
+
+pointcloud_to_laserscan_node:
+  ros__parameters:
+    # 目标坐标系（与 livox_ros_driver2 的 frame_id 一致）
+    target_frame: "livox_frame"
+
+    # 转换容差（秒）
+    transform_tolerance: 0.01
+
+    # 垂直高度过滤（米）
+    # 只保留这个高度范围内的点，过滤地面和天花板
+    # 根据 Mid360 安装高度调整：
+    #   - 安装高度约 0.2m，过滤地面（-0.3m）和高处（0.3m）
+    min_height: -0.3
+    max_height: 0.3
+
+    # 水平角度范围（弧度）
+    # Mid360 是 360° 扫描，保留全范围
+    angle_min: -3.14159  # -180°
+    angle_max: 3.14159   # +180°
+
+    # 角度分辨率（弧度）
+    # Mid360 非重复扫描，设为 0.01 rad（约 0.57°）
+    angle_increment: 0.01
+
+    # 扫描时间（秒）
+    scan_time: 0.1
+
+    # 距离范围（米）
+    range_min: 0.1
+    range_max: 50.0
+
+    # 无效点处理
+    # true: 用 inf 表示超出范围的点
+    # false: 用 range_max 表示
+    use_inf: true
+
+    # 无穷大值（当 use_inf=false 时使用）
+    inf_epsilon: 1.0

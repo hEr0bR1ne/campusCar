@@ -1,0 +1,52 @@
+version: "3.8"
+
+# ============================================================
+# campusCar 激光雷达驱动容器编排
+# 激光雷达：Livox Mid360（以太网 UDP 连接）
+# 使用方式：
+#   docker compose -f docker/lidar/docker-compose.yml up -d
+#   或直接使用 scripts/lidar_start.sh（推荐）
+# ============================================================
+
+services:
+  lidar_driver:
+    image: campuscar-lidar:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: campuscar_lidar
+    # 共享宿主机网络：
+    #   - Mid360 以太网 UDP 通信（端口 56000-56500）
+    #   - ROS2 DDS 多播（/scan 话题直接对宿主机可见）
+    network_mode: host
+    # 需要 NET_ADMIN 权限来配置网卡 IP
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOCALHOST_ONLY=0
+      # Mid360 网络配置
+      - LIVOX_HOST_IP=${LIVOX_HOST_IP:-192.168.1.2}
+      - LIVOX_HOST_NETMASK=${LIVOX_HOST_NETMASK:-24}
+      - LIVOX_NET_IFACE=${LIVOX_NET_IFACE:-}
+      - LIVOX_PUBLISH_FREQ=${LIVOX_PUBLISH_FREQ:-10.0}
+      # 点云转 LaserScan 参数
+      - SCAN_MIN_HEIGHT=${SCAN_MIN_HEIGHT:--0.3}
+      - SCAN_MAX_HEIGHT=${SCAN_MAX_HEIGHT:-0.3}
+      - SCAN_RANGE_MIN=${SCAN_RANGE_MIN:-0.1}
+      - SCAN_RANGE_MAX=${SCAN_RANGE_MAX:-50.0}
+      # 激光雷达安装位置（相对于 base_link）
+      - LIDAR_X=${LIDAR_X:-0.0}
+      - LIDAR_Y=${LIDAR_Y:-0.0}
+      - LIDAR_Z=${LIDAR_Z:-0.2}
+      - LIDAR_ROLL=${LIDAR_ROLL:-0.0}
+      - LIDAR_PITCH=${LIDAR_PITCH:-0.0}
+      - LIDAR_YAW=${LIDAR_YAW:-0.0}
+    volumes:
+      - ./config:/campuscar_lidar/config:ro
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

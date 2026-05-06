@@ -1,0 +1,27 @@
+# ============================================================
+# Livox Mid360 驱动参数
+# 对应 livox_ros_driver2 的 launch 参数
+# ============================================================
+
+# 发布频率（Hz），Mid360 最高支持 100Hz，默认 10Hz
+publish_freq: 10.0
+
+# 点云输出格式
+# 0: Livox 自定义格式 (CustomMsg)
+# 1: 标准 PointCloud2（推荐，与 pointcloud_to_laserscan 兼容）
+# 2: 仅 IMU
+xfer_format: 1
+
+# 是否多话题（每个设备独立话题）
+multi_topic: 0
+
+# 数据类型
+# 0: 非重复扫描（Mid360 默认）
+# 1: 重复扫描
+data_src: 0
+
+# 是否发布 IMU 数据
+imu_data_flag: 1
+
+# 话题名
+ros_frame_id: "livox_frame"
