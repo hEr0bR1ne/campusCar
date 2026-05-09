@@ -10,6 +10,7 @@
 set -e
 
 source /opt/ros/humble/setup.bash
+[ -f /livox_ws/setup.bash ] && source /livox_ws/setup.bash
 
 # ---- 配置参数（从环境变量读取，与 robot.env 风格一致）----
 LIVOX_HOST_IP="${LIVOX_HOST_IP:-192.168.1.2}"
@@ -56,9 +57,14 @@ ros2 run tf2_ros static_transform_publisher \
 TF_PID=$!
 
 # ---- 3. 启动 livox_ros_driver2 ----
+# msg_MID360_launch.py 硬编码了配置路径，命令行参数无效，直接覆盖默认配置文件
+LIVOX_DEFAULT_CFG="/livox_ws/livox_ros_driver2/share/livox_ros_driver2/config/MID360_config.json"
+if [ -f "$LIVOX_DEFAULT_CFG" ]; then
+    cp /campuscar_lidar/config/mid360.json "$LIVOX_DEFAULT_CFG"
+    log "已将 mid360.json 覆盖到 $LIVOX_DEFAULT_CFG"
+fi
 log "启动 livox_ros_driver2..."
 ros2 launch livox_ros_driver2 msg_MID360_launch.py \
-    user_config_path:=/campuscar_lidar/config/mid360.json \
     xfer_format:=1 \
     publish_freq:="$LIVOX_PUBLISH_FREQ" &
 LIVOX_PID=$!

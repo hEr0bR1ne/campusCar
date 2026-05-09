@@ -111,6 +111,7 @@ docker run -d \
     -e LIDAR_PITCH="${LIDAR_PITCH:-0.0}" \
     -e LIDAR_YAW="${LIDAR_YAW:-0.0}" \
     -v "${DOCKER_DIR}/config:/campuscar_lidar/config:ro" \
+    -v "${DOCKER_DIR}/entrypoint.sh:/entrypoint.sh:ro" \
     campuscar-lidar:latest \
     >> "$LOGDIR/lidar_docker.log" 2>&1
 
